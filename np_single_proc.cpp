@@ -1,15 +1,4 @@
 #include "np_simple.h"
-#include <sys/types.h>
-#include <sys/wait.h>
-#include <sys/socket.h>
-#include <fcntl.h>
-#include <unistd.h>
-#include <cstring>
-#include <vector>
-#include <algorithm>
-#include <signal.h>
-#include <netinet/in.h>
-#include <arpa/inet.h>
 
 using namespace std;
 
@@ -25,6 +14,9 @@ using namespace std;
 // !n
 #define num_pipe2_ 5
 
+sh instanceArr[30];
+fd_set activefds, readfds;
+
 void sig_chld(int signo){
     int status;
     wait(&status);
@@ -35,32 +27,43 @@ int main(int argc, char *argv[]){
     void sig_chld(int);
     signal(SIGCHLD, sig_chld);
 
-    sh instance;
+    FD_ZERO(&activefds);
+	FD_ZERO(&readfds);
+
     if (argc != 2){
 		return 0;
+    }
+
+    for(int i = 0; i < 30; i++){
+        instanceArr[i] = sh(i);
     }
     
     unsigned short port = (unsigned short)atoi(argv[1]);
 
 	int msock = create_socket(port);
-	listen(msock, 1);
+	listen(msock, 30);
 
-	int ssock, client_pid;
-	while((ssock = new_user(msock))){
-		switch(client_pid = fork()){
-			case 0:
-				dup2(ssock, STDIN_FILENO);
-				dup2(ssock, STDOUT_FILENO);
-				dup2(ssock, STDERR_FILENO);
-				close(msock);
+	struct timeval timeval = {0, 10};
 
-				instance.run();
-				break;
-			default:
-				close(ssock);
-				waitpid(client_pid, NULL, 0);
-				while(waitpid(-1, NULL, WNOHANG) > 0){}
+	while(true){
+
+		bcopy(&activefds, &readfds, sizeof(readfds));
+
+		if (select(findMax(msock), &readfds, NULL, NULL, &timeval) < 0){
+			cerr << "select fail" << endl;
 		}
+
+		if (FD_ISSET(msock, &readfds)){
+			if(new_user(msock) < 0){
+#ifdef DEBUG
+		    cerr << "Server is busy..." << endl;
+#endif
+            }
+		}
+
+		for(int i = 0; i < 30; i++){
+            instanceArr[i].run();
+        }
 	}
   
   
@@ -68,11 +71,28 @@ int main(int argc, char *argv[]){
 }
 
 int new_user(int msock){
-	struct sockaddr_in sin;
-	unsigned int alen = sizeof(sin);
-	int ssock = accept(msock, (struct sockaddr *)&sin, &alen);
 
-	return ssock;
+    for(int i = 0; i < 30; i++){
+        if(instanceArr[i].isAllocated == false){
+            struct sockaddr_in sin;
+            unsigned int alen = sizeof(sin);
+            int ssock = accept(msock, (struct sockaddr *)&sin, &alen);
+            FD_SET(sock, &activefds);
+
+            /* TODO: login and welcome feature */
+
+            return 0;
+        }
+    }
+
+	return -1;
+}
+
+void sh::allocate(int ssock_, struct sockaddr_in sin_){
+    this->ssock = ssock_;
+    this->isAllocated = true;
+    this->address = inet_ntoa(sin_.sin_addr);
+    this->address += ":" + to_string(htons(sin_.sin_port));
 }
 
 int create_socket(unsigned short port){
@@ -102,7 +122,10 @@ int create_socket(unsigned short port){
 void sh::prompt(){
     /* Data reset */
     this->cmdBlockCount = 1;
-    cout << "% ";
+    string msg = "% ";
+    /* TODO: broadcast function */
+    // broadcast(NULL, this->id, msg);
+    this->isDone = false;
 }
 
 void sh::cmdBlockGen(string input){
@@ -345,6 +368,10 @@ redo:
 
 void sh::run(){
 
+    if(!this->isAllocated){
+        return;
+    }
+
     string input;
 
     setenv("PATH", "bin:.", 1);
@@ -354,13 +381,33 @@ void sh::run(){
             }
 
     while(true){
+
         this->prompt();
 
-        getline(cin, input);
+        if (FD_ISSET(this->ssock, &readfds)){
+            bzero(readbuf, sizeof(readbuf));
+            int readCount = read(this->ssock, readbuf, sizeof(readbuf));
+            if (readCount < 0){
+                cerr << this->id << ": read error." << endl;
+                return;
+            } else {
+                input = readbuf;
+                if (input[input.length()-1] == '\n'){
+                    input = input.substr(0, input.length()-1);
+                    if (input[input.length()-1] == '\r'){
+                        input = input.substr(0, input.length()-1);
+                    }
+                }
+            }
+        } else {
+            return;
+        }
 
-        if (input[input.length()-1] == '\r'){
-			input = input.substr(0, input.length()-1);
-		}
+
+        if(input.length() == 0){
+            this->isDone = true;
+            return;
+        }
 
         this->parser(input, 0, input.length());
         
@@ -386,11 +433,6 @@ void sh::run(){
         }
         
         this->parse.clear();
-
-        if(input.length() == 0){
-            continue;
-        }
-
         this->cmdBlockGen(input);
         this->execCmd(input);
 

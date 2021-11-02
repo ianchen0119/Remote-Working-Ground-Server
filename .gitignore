@@ -5,3 +5,5 @@
 *.bin
 *.out
 npshell
+np_simple
+np_single_proc
