@@ -1,4 +1,4 @@
-#include "np_simple.h"
+#include "np_single_proc.h"
 
 using namespace std;
 
@@ -16,6 +16,16 @@ using namespace std;
 
 sh instanceArr[30];
 fd_set activefds, readfds;
+
+int findMax(int msock){
+	int maxValue = msock;
+	for (int i = 0; i < 30; i++){
+		if (instanceArr[i].ssock > maxValue){
+			maxValue = instanceArr[i].ssock;
+		}
+	}
+	return maxValue + 1;
+}
 
 void sig_chld(int signo){
     int status;
@@ -71,14 +81,15 @@ int main(int argc, char *argv[]){
 }
 
 int new_user(int msock){
-
     for(int i = 0; i < 30; i++){
-        if(instanceArr[i].isAllocated == false){
+        if(!instanceArr[i].isAllocated){
             struct sockaddr_in sin;
             unsigned int alen = sizeof(sin);
             int ssock = accept(msock, (struct sockaddr *)&sin, &alen);
-            FD_SET(sock, &activefds);
 
+            instanceArr[i].allocate(ssock, sin);
+
+            FD_SET(instanceArr[i].ssock, &activefds);
             /* TODO: login and welcome feature */
 
             return 0;
@@ -91,6 +102,7 @@ int new_user(int msock){
 void sh::allocate(int ssock_, struct sockaddr_in sin_){
     this->ssock = ssock_;
     this->isAllocated = true;
+    this->isDone = true;
     this->address = inet_ntoa(sin_.sin_addr);
     this->address += ":" + to_string(htons(sin_.sin_port));
 }
@@ -116,16 +128,32 @@ int create_socket(unsigned short port){
 #endif
 		exit(0);
 	}
+    FD_SET(msock, &activefds);
 	return msock;
+}
+
+void broadcast(int *sou, int *des, string msg_){
+	const char *msg = msg_.c_str();
+	char unit;
+	if (des == NULL){
+		for (int i = 0; i < 30; i++){
+			if (instanceArr[i].isAllocated){
+				write(instanceArr[i].ssock, msg, sizeof(unit) * msg_.length());
+			}
+		}
+	} else {
+		write(instanceArr[*des].ssock, msg, sizeof(unit) * msg_.length());
+	}
 }
 
 void sh::prompt(){
     /* Data reset */
     this->cmdBlockCount = 1;
-    string msg = "% ";
-    /* TODO: broadcast function */
-    // broadcast(NULL, this->id, msg);
-    this->isDone = false;
+    if(this->isDone){
+        string msg = "% ";
+        broadcast(NULL, &this->id, msg);
+        this->isDone = false;
+    }
 }
 
 void sh::cmdBlockGen(string input){
@@ -288,6 +316,10 @@ redo:
             }
         }else{
             // child
+
+            dup2(instanceArr[this->id].ssock, STDOUT_FILENO);
+			dup2(instanceArr[this->id].ssock, STDERR_FILENO);
+
             if(this->cmdBlockSet[i].next == pipe_ && this->cmdBlockSet[i].prev == pipe_){
                 close(this->pipefds[!p][1]);
                 dup2(this->pipefds[!p][0], STDIN_FILENO);
@@ -369,19 +401,20 @@ redo:
 void sh::run(){
 
     if(!this->isAllocated){
+        
         return;
     }
 
     string input;
+    char readbuf[15000];
 
     setenv("PATH", "bin:.", 1);
 
     for(int k = 0; k < MAX_NUMPIPE; k++){
                 this->timerArr[k] = -1;
-            }
+    }
 
     while(true){
-
         this->prompt();
 
         if (FD_ISSET(this->ssock, &readfds)){
@@ -411,8 +444,14 @@ void sh::run(){
 
         this->parser(input, 0, input.length());
         
-        if(this->parse[0] == "exit"){
-            exit(0);
+        if(this->parse[0] == "exit" || this->parse[0] == "EOF"){
+            /* TODO: show logout msg */
+            int status;
+            FD_CLR(this->ssock, &activefds);
+		    close(this->ssock);
+            this->isAllocated = false;
+            while(waitpid(-1, &status, WNOHANG) > 0){}
+            return;
         }
         
         if(this->parse[0] == "setenv"){
@@ -435,7 +474,7 @@ void sh::run(){
         this->parse.clear();
         this->cmdBlockGen(input);
         this->execCmd(input);
-
         input.clear();
+        this->isDone = true;
     }
 }

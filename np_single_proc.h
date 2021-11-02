@@ -51,7 +51,6 @@ class sh{
         /* === For multi-user === */
 
         bool isDone = true;
-        int ssock; // slave
         string address;
 
         /* === Functions === */
@@ -64,20 +63,18 @@ class sh{
         void parser(string input, int start, int end);
         /* Exec the command */
         int execCmd(string input);
+    public:
         /* allocate for new user */
         void allocate(int ssock, struct sockaddr_in sin_);
-    public:
         /* User ID */
         int id;
+        int ssock = -1; // slave
         bool isAllocated = false;
         string name = "";
         sh() = default;
-        sh(int id_):id(id_){
-            cout << this->id << endl;
-        }
+        sh(int id_):id(id_){}
         ~sh() = default;
         void run();
 };
-
 
 #endif
