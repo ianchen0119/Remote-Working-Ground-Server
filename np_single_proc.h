@@ -48,11 +48,6 @@ class sh{
         /* For numbered pipe */
         int timerArr[MAX_NUMPIPE] = {0};
 
-        /* === For multi-user === */
-
-        bool isDone = true;
-        string address;
-
         /* === Functions === */
 
         /* Show prompt */
@@ -66,15 +61,26 @@ class sh{
     public:
         /* allocate for new user */
         void allocate(int ssock, struct sockaddr_in sin_);
+        bool isDone = true;
+        string address;
         /* User ID */
         int id;
         int ssock = -1; // slave
         bool isAllocated = false;
-        string name = "";
+        string name = "(no name)";
         sh() = default;
         sh(int id_):id(id_){}
         ~sh() = default;
         void run();
 };
+
+void broadcast(int *sou, int *des, string msg_);
+void who();
+void tell(int targetID, string msg);
+void yell(string msg);
+void setName(string newName);
+void welcome(int id);
+void login(int id);
+void logout(int id);
 
 #endif

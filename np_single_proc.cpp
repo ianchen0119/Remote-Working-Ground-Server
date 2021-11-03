@@ -16,6 +16,7 @@ using namespace std;
 
 sh instanceArr[30];
 fd_set activefds, readfds;
+int servingID = 0;
 
 int findMax(int msock){
 	int maxValue = msock;
@@ -90,7 +91,9 @@ int new_user(int msock){
             instanceArr[i].allocate(ssock, sin);
 
             FD_SET(instanceArr[i].ssock, &activefds);
-            /* TODO: login and welcome feature */
+
+            welcome(i);
+            login(i);
 
             return 0;
         }
@@ -144,6 +147,69 @@ void broadcast(int *sou, int *des, string msg_){
 	} else {
 		write(instanceArr[*des].ssock, msg, sizeof(unit) * msg_.length());
 	}
+}
+
+void who(){
+	string msg = "<ID>\t<nickname>\t<IP:port>\t<indicate me>\n";
+	for (int i = 0; i < 30; i++){
+		if (instanceArr[i].isAllocated){
+			msg += to_string(instanceArr[i].id + 1) + "\t" + instanceArr[i].name + "\t" + instanceArr[i].address;
+			if (instanceArr[i].id == servingID){
+				msg += "\t<-me";
+			}
+			msg += "\n";
+		}
+	}
+	broadcast(NULL, &servingID, msg);
+}
+
+void tell(int targetID, string msg){
+	if (instanceArr[targetID].isAllocated){
+		msg = "*** " + instanceArr[servingID].name + " told you ***: " + msg + "\n";
+		broadcast(NULL, &targetID, msg);
+	} else {
+		msg = "*** Error: user #" + to_string(targetID + 1) + " does not exist yet. ***\n";
+		broadcast(NULL, &servingID, msg);
+	}
+}
+
+void yell(string msg){
+	msg = "*** " + instanceArr[servingID].name + " yelled ***: " + msg + "\n";
+	broadcast(NULL, NULL, msg);
+}
+
+void setName(string newName){
+	for (int i = 0; i < 30; i++){
+		if (i == servingID){
+			continue;
+		}
+		if (instanceArr[i].isAllocated && instanceArr[i].name == newName){
+			string msg = "*** User '" + newName + "' already exists. ***\n";
+			broadcast(NULL, &servingID, msg);
+			return;
+		}
+	}
+	instanceArr[servingID].name = newName;
+	string msg = "*** User from " + instanceArr[servingID].address + " is named '" + instanceArr[servingID].name + "'. ***\n";
+	broadcast(NULL, NULL, msg);
+}
+
+void welcome(int id){
+	string msg = "";
+	msg = msg + "****************************************\n"
+			  + "** Welcome to the information server. **\n"
+			  + "****************************************\n";
+	broadcast(NULL, &id, msg);
+}
+
+void login(int id){
+	string msg = "*** User '" + instanceArr[id].name + "' entered from " + instanceArr[id].address + ". ***\n";
+	broadcast(NULL, NULL, msg);
+}
+
+void logout(int id){
+	string msg = "*** User '" + instanceArr[id].name + "' left. ***\n";
+	broadcast(NULL, NULL, msg);
 }
 
 void sh::prompt(){
@@ -400,8 +466,9 @@ redo:
 
 void sh::run(){
 
-    if(!this->isAllocated){
-        
+    servingID = this->id;
+
+    if(!this->isAllocated){  
         return;
     }
 
@@ -414,67 +481,95 @@ void sh::run(){
                 this->timerArr[k] = -1;
     }
 
-    while(true){
-        this->prompt();
+    this->prompt();
 
-        if (FD_ISSET(this->ssock, &readfds)){
-            bzero(readbuf, sizeof(readbuf));
-            int readCount = read(this->ssock, readbuf, sizeof(readbuf));
-            if (readCount < 0){
-                cerr << this->id << ": read error." << endl;
-                return;
-            } else {
-                input = readbuf;
-                if (input[input.length()-1] == '\n'){
+    if (FD_ISSET(this->ssock, &readfds)){
+        bzero(readbuf, sizeof(readbuf));
+        int readCount = read(this->ssock, readbuf, sizeof(readbuf));
+        if (readCount < 0){
+            cerr << this->id << ": read error." << endl;
+            return;
+        } else {
+            input = readbuf;
+            if (input[input.length()-1] == '\n'){
+                input = input.substr(0, input.length()-1);
+                if (input[input.length()-1] == '\r'){
                     input = input.substr(0, input.length()-1);
-                    if (input[input.length()-1] == '\r'){
-                        input = input.substr(0, input.length()-1);
-                    }
                 }
             }
-        } else {
-            return;
         }
-
-
-        if(input.length() == 0){
-            this->isDone = true;
-            return;
-        }
-
-        this->parser(input, 0, input.length());
-        
-        if(this->parse[0] == "exit" || this->parse[0] == "EOF"){
-            /* TODO: show logout msg */
-            int status;
-            FD_CLR(this->ssock, &activefds);
-		    close(this->ssock);
-            this->isAllocated = false;
-            while(waitpid(-1, &status, WNOHANG) > 0){}
-            return;
-        }
-        
-        if(this->parse[0] == "setenv"){
-            setenv(this->parse[1].c_str(), this->parse[2].c_str(), 1);
-            this->parse.clear();
-            for(int k = 0; k < MAX_NUMPIPE; k++){
-                this->timerArr[k] = (this->timerArr[k] == -1)?(-1):(this->timerArr[k] - 1);
-            }
-            continue;
-        }else if(this->parse[0] == "printenv"){
-            if (getenv(this->parse[1].c_str()) != NULL)
-                cout << getenv(this->parse[1].c_str()) << endl;
-            this->parse.clear();
-            for(int k = 0; k < MAX_NUMPIPE; k++){
-                this->timerArr[k] = (this->timerArr[k] == -1)?(-1):(this->timerArr[k] - 1);
-            }
-            continue;
-        }
-        
-        this->parse.clear();
-        this->cmdBlockGen(input);
-        this->execCmd(input);
-        input.clear();
-        this->isDone = true;
+    } else {
+        return;
     }
+
+
+    if(input.length() == 0){
+        this->isDone = true;
+        return;
+    }
+
+    this->parser(input, 0, input.length());
+        
+    if(this->parse[0] == "exit" || this->parse[0] == "EOF"){
+        logout(this->id);
+        int status;
+        FD_CLR(this->ssock, &activefds);
+		close(this->ssock);
+        this->isAllocated = false;
+        this->name = "(no name)";
+        while(waitpid(-1, &status, WNOHANG) > 0){}
+        return;
+    }
+        
+    bool trigger = false;
+
+    if(this->parse[0] == "setenv"){
+        setenv(this->parse[1].c_str(), this->parse[2].c_str(), 1);
+        trigger = true;
+    }else if(this->parse[0] == "printenv"){
+        if (getenv(this->parse[1].c_str()) != NULL)
+            cout << getenv(this->parse[1].c_str()) << endl;
+        trigger = true;
+    }else if(this->parse[0] == "who"){
+        who();
+        trigger = true;
+    }else if(this->parse[0] == "tell"){
+        string msg;
+        for(int i = 2; i < (int) this->parse.size(); i++){
+            msg += this->parse[i];
+            if(i != (int) this->parse.size() - 1){
+                msg += " ";
+            }
+        }
+        tell(stoi(this->parse[1]) - 1, msg);
+        trigger = true;
+    }else if(this->parse[0] == "yell"){
+        string msg;
+        for(int i = 1; i < (int) this->parse.size(); i++){
+            msg += this->parse[i];
+            if(i != (int) this->parse.size() - 1){
+                msg += " ";
+            }
+        }
+        yell(msg);
+        trigger = true;
+    }else if(this->parse[0] == "name"){
+        setName(this->parse[1]);
+        trigger = true;
+    }
+
+    if(trigger){
+        this->parse.clear();
+        for(int k = 0; k < MAX_NUMPIPE; k++){
+            this->timerArr[k] = (this->timerArr[k] == -1)?(-1):(this->timerArr[k] - 1);
+        }
+        this->isDone = true;
+        return;
+    }
+        
+    this->parse.clear();
+    this->cmdBlockGen(input);
+    this->execCmd(input);
+    input.clear();
+    this->isDone = true;
 }
