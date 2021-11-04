@@ -5,7 +5,7 @@ using namespace std;
 #define empty_ 0
 // >
 #define redirOut_ 1
-// <
+// <n
 #define redirIn_ 2
 // |
 #define pipe_ 3
@@ -13,7 +13,10 @@ using namespace std;
 #define num_pipe1_ 4
 // !n
 #define num_pipe2_ 5
+// >n
+#define userPipe_ 6
 
+vector <userPipe> userPipeVector;
 sh instanceArr[30];
 fd_set activefds, readfds;
 int servingID = 0;
@@ -108,6 +111,11 @@ void sh::allocate(int ssock_, struct sockaddr_in sin_){
     this->isDone = true;
     this->address = inet_ntoa(sin_.sin_addr);
     this->address += ":" + to_string(htons(sin_.sin_port));
+    setenv("PATH", "bin:.", 1);
+
+    for(int k = 0; k < MAX_NUMPIPE; k++){
+        this->timerArr[k] = -1;
+    }
 }
 
 int create_socket(unsigned short port){
@@ -212,10 +220,71 @@ void logout(int id){
 	broadcast(NULL, NULL, msg);
 }
 
+int createUserPipe(int sou, int des, string msg_){
+    int index;
+    if(des < 0 || des > 29 || !instanceArr[des].isAllocated){
+        string msg = "*** Error: user #" + to_string(des + 1) + " does not exist yet. ***\n";
+        broadcast(NULL, &sou, msg);
+        return -1;
+    }else{
+        if(checkUserPipe(index, sou, des)){
+            string msg = "*** Error: the pipe #" + to_string(sou + 1) + "->#" + to_string(des + 1) + " already exists. ***\n";
+            broadcast(NULL, &sou, msg);
+            return -1;
+        }else{
+            string msg = "*** " + instanceArr[sou].name + " (#" + to_string(sou + 1) + ") just piped '" + msg_ + "' to "
+							+ instanceArr[des].name + " (#" + to_string(des + 1) + ") ***\n";
+            broadcast(NULL, NULL, msg);
+            userPipe newElement;
+            newElement.sourceID = sou;
+            newElement.targetID = des;
+            if(pipe(newElement.fd) < 0){
+                cerr << "err" << endl;
+                for(;;){
+
+                }
+            }
+        }
+    }
+    return 0;
+}
+
+int receiveFromUserPipe(int sou, int des, string msg_){
+    int index;
+    if(des < 0 || des > 29 || !instanceArr[des].isAllocated){
+        string msg = "*** Error: user #" + to_string(des + 1) + " does not exist yet. ***\n";
+        broadcast(NULL, &sou, msg);
+        return -1;
+    }else{
+        if(checkUserPipe(index, sou, des)){
+            string msg = "*** " + instanceArr[sou].name + " (#" + to_string(sou + 1) + ") just received from "
+							+ instanceArr[des].name + " (#" + to_string(des + 1) + ") by '" + msg_ + "' ***\n";
+			broadcast(NULL, NULL, msg);
+        }else{
+            string msg = "*** Error: the pipe #" + to_string(des + 1) + "->#" + to_string(sou + 1) + " does not exist yet. ***\n";
+			broadcast(NULL, &sou, msg);
+            return -1;
+        }
+    }
+    return 0;
+}
+
+bool checkUserPipe(int &index, int sou, int des){
+	bool isExist = false;
+	for (int i = 0; i < (int) userPipeVector.size(); i++){
+		if (userPipeVector[i].sourceID == sou && userPipeVector[i].targetID == des){
+			index = i;
+			isExist = true;
+			break;
+		}
+	}
+	return isExist;
+}
+
 void sh::prompt(){
-    /* Data reset */
-    this->cmdBlockCount = 1;
     if(this->isDone){
+        /* Data reset */
+        this->cmdBlockCount = 1;
         string msg = "% ";
         broadcast(NULL, &this->id, msg);
         this->isDone = false;
@@ -280,12 +349,52 @@ void sh::cmdBlockGen(string input){
                 break;
             case '>':
                 this->cmdBlockSet[this->cmdBlockCount - 1].prev = prevSymbol;
-                prevSymbol = redirOut_;
-                this->cmdBlockSet[this->cmdBlockCount - 1].next = prevSymbol;
-                this->cmdBlockSet[this->cmdBlockCount - 1].end = count - 1;
-                this->cmdBlockCount++;
-                // next cmdBlock
-                this->cmdBlockSet[this->cmdBlockCount - 1].start = count + 1;
+                if(49 <= (int)input[count + 1] && (int)input[count + 1] <= 57){
+                    prevSymbol = userPipe_;
+                    string targetUser;
+                    this->cmdBlockSet[this->cmdBlockCount - 1].next = prevSymbol;
+                    while(48 <= (int)input[count + n] && (int)input[count + n] <= 57){
+                        targetUser.push_back(input[count + n]);
+                        n++;
+                    }
+                    int targetUserID = (targetUser == "")?(1):(stoi(targetUser) - 1);
+                    this->cmdBlockSet[this->cmdBlockCount - 1].end = count - 1;
+                    string msg = input.substr(0, input.length() - n - 1);
+                    if(createUserPipe(this->id, targetUserID, msg) < 0){
+                        this->cmdBlockSet[this->cmdBlockCount - 1].next = empty_;
+                        return;
+                    }
+                    this->cmdBlockSet[this->cmdBlockCount - 1].num = targetUserID;
+                    return;
+                }else{
+                    prevSymbol = redirOut_;
+                    this->cmdBlockSet[this->cmdBlockCount - 1].next = prevSymbol;
+                    this->cmdBlockSet[this->cmdBlockCount - 1].end = count - 1;
+                    this->cmdBlockCount++;
+                    // next cmdBlock
+                    this->cmdBlockSet[this->cmdBlockCount - 1].start = count + 1;
+                }
+                break;
+            case '<':
+                this->cmdBlockSet[this->cmdBlockCount - 1].prev = prevSymbol;
+                prevSymbol = redirIn_;
+                if(49 <= (int)input[count + 1] && (int)input[count + 1] <= 57){
+                    string targetUser;
+                    this->cmdBlockSet[this->cmdBlockCount - 1].next = prevSymbol;
+                    while(48 <= (int)input[count + n] && (int)input[count + n] <= 57){
+                        targetUser.push_back(input[count + n]);
+                        n++;
+                    }
+                    int targetUserID = (targetUser == "")?(1):(stoi(targetUser) - 1);
+                    this->cmdBlockSet[this->cmdBlockCount - 1].end = count - 1;
+                    string msg = input.substr(0, input.length() - n - 1);
+                    if(receiveFromUserPipe(this->id, targetUserID, msg) < 0){
+                        this->cmdBlockSet[this->cmdBlockCount - 1].next = empty_;
+                        return;
+                    }
+                    this->cmdBlockSet[this->cmdBlockCount - 1].num = targetUserID;
+                    return;
+                }
                 break;
             default:
                 break;
@@ -340,6 +449,7 @@ int sh::execCmd(string input){
         this->parse.clear();
 redo:
         int pid = fork();
+        /* TODO: Handle user pipe */
 
         int status;
         if(pid < 0){
@@ -369,7 +479,7 @@ redo:
             
             int status;
             int next = (int)this->cmdBlockSet[i].next;
-            if(next <= 2){
+            if(next <= 2 || next == 6){
                 waitpid(pid, &status, 0);
             }
 
@@ -385,6 +495,8 @@ redo:
 
             dup2(instanceArr[this->id].ssock, STDOUT_FILENO);
 			dup2(instanceArr[this->id].ssock, STDERR_FILENO);
+
+            close(instanceArr[this->id].ssock);
 
             if(this->cmdBlockSet[i].next == pipe_ && this->cmdBlockSet[i].prev == pipe_){
                 close(this->pipefds[!p][1]);
@@ -437,7 +549,7 @@ redo:
             /* next symbol is redict */
             if(this->cmdBlockSet[i].next == redirOut_){
                 close(STDOUT_FILENO);
-                this->parser(input, this->cmdBlockSet[i+1].start, this->cmdBlockSet[i+1].end);
+                this->parser(input, this->cmdBlockSet[i + 1].start, this->cmdBlockSet[i + 1].end);
                 char* filePath = (char*)calloc(0, sizeof(char));
                 filePath = strdup(this->parse[0].c_str());
                 this->parse.clear();
@@ -475,101 +587,96 @@ void sh::run(){
     string input;
     char readbuf[15000];
 
-    setenv("PATH", "bin:.", 1);
-
-    for(int k = 0; k < MAX_NUMPIPE; k++){
-                this->timerArr[k] = -1;
-    }
-
-    this->prompt();
-
-    if (FD_ISSET(this->ssock, &readfds)){
-        bzero(readbuf, sizeof(readbuf));
-        int readCount = read(this->ssock, readbuf, sizeof(readbuf));
-        if (readCount < 0){
-            cerr << this->id << ": read error." << endl;
-            return;
-        } else {
-            input = readbuf;
-            if (input[input.length()-1] == '\n'){
-                input = input.substr(0, input.length()-1);
-                if (input[input.length()-1] == '\r'){
+    while(true){
+        this->prompt();
+        if (FD_ISSET(this->ssock, &readfds)){
+            bzero(readbuf, sizeof(readbuf));
+            int readCount = read(this->ssock, readbuf, sizeof(readbuf));
+            if (readCount < 0){
+                cerr << this->id << ": read error." << endl;
+                return;
+            } else {
+                input = readbuf;
+                if (input[input.length()-1] == '\n'){
                     input = input.substr(0, input.length()-1);
+                    if (input[input.length()-1] == '\r'){
+                        input = input.substr(0, input.length()-1);
+                    }
                 }
             }
+        } else {
+            return;
         }
-    } else {
-        return;
-    }
 
+        if(input.length() == 0){
+            this->isDone = true;
+            return;
+        }
 
-    if(input.length() == 0){
-        this->isDone = true;
-        return;
-    }
+        this->parser(input, 0, input.length());
+            
+        if(this->parse[0] == "exit" || this->parse[0] == "EOF"){
+            logout(this->id);
+            int status;
+            FD_CLR(this->ssock, &activefds);
+            close(this->ssock);
+            this->isAllocated = false;
+            this->name = "(no name)";
+            while(waitpid(-1, &status, WNOHANG) > 0){}
+            return;
+        }
+            
+        bool trigger = false;
 
-    this->parser(input, 0, input.length());
-        
-    if(this->parse[0] == "exit" || this->parse[0] == "EOF"){
-        logout(this->id);
-        int status;
-        FD_CLR(this->ssock, &activefds);
-		close(this->ssock);
-        this->isAllocated = false;
-        this->name = "(no name)";
-        while(waitpid(-1, &status, WNOHANG) > 0){}
-        return;
-    }
-        
-    bool trigger = false;
-
-    if(this->parse[0] == "setenv"){
-        setenv(this->parse[1].c_str(), this->parse[2].c_str(), 1);
-        trigger = true;
-    }else if(this->parse[0] == "printenv"){
-        if (getenv(this->parse[1].c_str()) != NULL)
-            cout << getenv(this->parse[1].c_str()) << endl;
-        trigger = true;
-    }else if(this->parse[0] == "who"){
-        who();
-        trigger = true;
-    }else if(this->parse[0] == "tell"){
-        string msg;
-        for(int i = 2; i < (int) this->parse.size(); i++){
-            msg += this->parse[i];
-            if(i != (int) this->parse.size() - 1){
-                msg += " ";
+        if(this->parse[0] == "setenv"){
+            setenv(this->parse[1].c_str(), this->parse[2].c_str(), 1);
+            trigger = true;
+        }else if(this->parse[0] == "printenv"){
+            if (getenv(this->parse[1].c_str()) != NULL)
+                cout << getenv(this->parse[1].c_str()) << endl;
+            trigger = true;
+        }else if(this->parse[0] == "who"){
+            who();
+            trigger = true;
+        }else if(this->parse[0] == "tell"){
+            string msg;
+            for(int i = 2; i < (int) this->parse.size(); i++){
+                msg += this->parse[i];
+                if(i != (int) this->parse.size() - 1){
+                    msg += " ";
+                }
             }
-        }
-        tell(stoi(this->parse[1]) - 1, msg);
-        trigger = true;
-    }else if(this->parse[0] == "yell"){
-        string msg;
-        for(int i = 1; i < (int) this->parse.size(); i++){
-            msg += this->parse[i];
-            if(i != (int) this->parse.size() - 1){
-                msg += " ";
+            tell(stoi(this->parse[1]) - 1, msg);
+            trigger = true;
+        }else if(this->parse[0] == "yell"){
+            string msg;
+            for(int i = 1; i < (int) this->parse.size(); i++){
+                msg += this->parse[i];
+                if(i != (int) this->parse.size() - 1){
+                    msg += " ";
+                }
             }
+            yell(msg);
+            trigger = true;
+        }else if(this->parse[0] == "name"){
+            setName(this->parse[1]);
+            trigger = true;
         }
-        yell(msg);
-        trigger = true;
-    }else if(this->parse[0] == "name"){
-        setName(this->parse[1]);
-        trigger = true;
-    }
 
-    if(trigger){
+        if(trigger){
+            this->parse.clear();
+            for(int k = 0; k < MAX_NUMPIPE; k++){
+                this->timerArr[k] = (this->timerArr[k] == -1)?(-1):(this->timerArr[k] - 1);
+            }
+            this->isDone = true;
+            return;
+        }
+
         this->parse.clear();
-        for(int k = 0; k < MAX_NUMPIPE; k++){
-            this->timerArr[k] = (this->timerArr[k] == -1)?(-1):(this->timerArr[k] - 1);
-        }
+        this->cmdBlockGen(input);
+        this->execCmd(input);
+        input.clear();
         this->isDone = true;
         return;
     }
-        
-    this->parse.clear();
-    this->cmdBlockGen(input);
-    this->execCmd(input);
-    input.clear();
-    this->isDone = true;
 }

@@ -30,6 +30,12 @@ typedef struct cmdBlock{
     int end = 0;
 } cmdBlock;
 
+typedef struct userPipe{
+	int sourceID;
+	int targetID;
+	int fd[2];
+} userPipe;
+
 int create_socket(unsigned short port);
 
 int new_user(int msock);
@@ -82,5 +88,8 @@ void setName(string newName);
 void welcome(int id);
 void login(int id);
 void logout(int id);
+int createUserPipe(int sou, int des, string msg_);
+int receiveFromUserPipe(int sou, int des, string msg_);
+bool checkUserPipe(int &index, int source, int des);
 
 #endif
