@@ -15,6 +15,7 @@ using namespace std;
 #define num_pipe2_ 5
 // >n
 #define userPipe_ 6
+#define notExist_ 7
 
 vector <userPipe> userPipeVector;
 sh instanceArr[30];
@@ -244,6 +245,7 @@ int createUserPipe(int sou, int des, string msg_){
 
                 }
             }
+            userPipeVector.push_back(newElement);
         }
     }
     return 0;
@@ -361,7 +363,7 @@ void sh::cmdBlockGen(string input){
                     this->cmdBlockSet[this->cmdBlockCount - 1].end = count - 1;
                     string msg = input.substr(0, input.length() - n - 1);
                     if(createUserPipe(this->id, targetUserID, msg) < 0){
-                        this->cmdBlockSet[this->cmdBlockCount - 1].next = empty_;
+                        this->cmdBlockSet[this->cmdBlockCount - 1].next = notExist_;
                         return;
                     }
                     this->cmdBlockSet[this->cmdBlockCount - 1].num = targetUserID;
@@ -388,8 +390,8 @@ void sh::cmdBlockGen(string input){
                     int targetUserID = (targetUser == "")?(1):(stoi(targetUser) - 1);
                     this->cmdBlockSet[this->cmdBlockCount - 1].end = count - 1;
                     string msg = input.substr(0, input.length() - n - 1);
-                    if(receiveFromUserPipe(this->id, targetUserID, msg) < 0){
-                        this->cmdBlockSet[this->cmdBlockCount - 1].next = empty_;
+                    if(receiveFromUserPipe(targetUserID, this->id, msg) < 0){
+                        this->cmdBlockSet[this->cmdBlockCount - 1].next = notExist_;
                         return;
                     }
                     this->cmdBlockSet[this->cmdBlockCount - 1].num = targetUserID;
@@ -449,7 +451,6 @@ int sh::execCmd(string input){
         this->parse.clear();
 redo:
         int pid = fork();
-        /* TODO: Handle user pipe */
 
         int status;
         if(pid < 0){
@@ -469,17 +470,29 @@ redo:
                 p = !p;
             }
 
-            // /* numbered pipe */
+            /* numbered pipe */
             for(int k = 0; k < MAX_NUMPIPE; k++){
                 if(this->timerArr[k] == 0){
                     close(this->numPipefds[k][1]);
                     close(this->numPipefds[k][0]);
                 }
             }
+
+            /* user pipe */
+            if(this->cmdBlockSet[i].next == redirIn_){
+                int index = this->cmdBlockSet[i].num;
+                for (int i = 0; i < (int) userPipeVector.size(); i++){
+                    if (userPipeVector[i].sourceID == index && userPipeVector[i].targetID == this->id){
+                        close(userPipeVector[i].fd[1]);
+                        close(userPipeVector[i].fd[0]);
+                        userPipeVector.erase(userPipeVector.begin() + i);
+                    }
+                }
+            }
             
             int status;
             int next = (int)this->cmdBlockSet[i].next;
-            if(next <= 2 || next == 6){
+            if(next <= 2 || next >= 6){
                 waitpid(pid, &status, 0);
             }
 
@@ -497,6 +510,13 @@ redo:
 			dup2(instanceArr[this->id].ssock, STDERR_FILENO);
 
             close(instanceArr[this->id].ssock);
+
+            if(this->cmdBlockSet[i].next == notExist_){
+                close(this->pipefds[!p][0]);
+                close(this->pipefds[p][0]);
+                close(this->pipefds[!p][1]);
+                close(this->pipefds[p][1]);
+            }
 
             if(this->cmdBlockSet[i].next == pipe_ && this->cmdBlockSet[i].prev == pipe_){
                 close(this->pipefds[!p][1]);
@@ -527,7 +547,6 @@ redo:
             }
 
             /* numbered pipe */
-
             if(this->cmdBlockSet[i].next == num_pipe1_ || this->cmdBlockSet[i].next == num_pipe2_){
                 close(this->numPipefds[this->cmdBlockSet[i].num][0]);
                 dup2(this->numPipefds[this->cmdBlockSet[i].num][1] ,STDOUT_FILENO);
@@ -545,6 +564,30 @@ redo:
                 }
             }
 
+            /* user pipe */
+            if(this->cmdBlockSet[i].next == userPipe_){
+                int index = this->cmdBlockSet[i].num;
+                for (int i = 0; i < (int) userPipeVector.size(); i++){
+                    if (userPipeVector[i].sourceID == this->id && userPipeVector[i].targetID == index){
+                        close(userPipeVector[i].fd[0]);
+                        dup2(userPipeVector[i].fd[1], STDOUT_FILENO);
+                        close(userPipeVector[i].fd[1]);
+                        break;
+                    }
+                }
+            }
+
+            if(this->cmdBlockSet[i].next == redirIn_){
+                int index = this->cmdBlockSet[i].num;
+                for (int i = 0; i < (int) userPipeVector.size(); i++){
+                    if (userPipeVector[i].sourceID == index && userPipeVector[i].targetID == this->id){
+                        close(userPipeVector[i].fd[1]);
+                        dup2(userPipeVector[i].fd[0], STDIN_FILENO);
+                        close(userPipeVector[i].fd[0]);
+                        break;
+                    }
+                }
+            }
 
             /* next symbol is redict */
             if(this->cmdBlockSet[i].next == redirOut_){
@@ -556,7 +599,7 @@ redo:
                 creat(filePath, 438);
             }
 
-            if(this->cmdBlockSet[i].prev == redirOut_){
+            if(this->cmdBlockSet[i].prev == redirOut_ || this->cmdBlockSet[i].next == notExist_){
                 exit(0);
             }
 
@@ -622,6 +665,13 @@ void sh::run(){
             close(this->ssock);
             this->isAllocated = false;
             this->name = "(no name)";
+            for (int i = 0; i < (int) userPipeVector.size(); i++){
+                if (userPipeVector[i].sourceID == this->id || userPipeVector[i].targetID == this->id){
+                    close(userPipeVector[i].fd[1]);
+                    close(userPipeVector[i].fd[0]);
+                    userPipeVector.erase(userPipeVector.begin() + i);
+                }
+            }
             while(waitpid(-1, &status, WNOHANG) > 0){}
             return;
         }
