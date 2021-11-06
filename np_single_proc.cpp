@@ -93,7 +93,6 @@ int new_user(int msock){
             struct sockaddr_in sin;
             unsigned int alen = sizeof(sin);
             int ssock = accept(msock, (struct sockaddr *)&sin, &alen);
-
             instanceArr[i].allocate(ssock, sin);
 
             FD_SET(instanceArr[i].ssock, &activefds);
@@ -115,6 +114,10 @@ void sh::allocate(int ssock_, struct sockaddr_in sin_){
     this->address = inet_ntoa(sin_.sin_addr);
     this->address += ":" + to_string(htons(sin_.sin_port));
     setenv("PATH", "bin:.", 1);
+    envVal new_envVal;
+    new_envVal.name = "PATH";
+    new_envVal.value = "bin:.";
+    this->envVals.push_back(new_envVal);
 
     for(int k = 0; k < MAX_NUMPIPE; k++){
         this->timerArr[k] = -1;
@@ -671,6 +674,9 @@ void sh::run(){
             int status;
             FD_CLR(this->ssock, &activefds);
             close(this->ssock);
+            this->parse.clear();
+            input.clear();
+            this->isDone = true;
             this->isAllocated = false;
             this->name = "(no name)";
             for (int i = 0; i < (int) userPipeVector.size(); i++){
