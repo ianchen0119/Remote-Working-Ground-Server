@@ -45,6 +45,8 @@ int main(int argc, char *argv[]){
     FD_ZERO(&activefds);
 	FD_ZERO(&readfds);
 
+    clearenv();
+
     if (argc != 2){
 		return 0;
     }
@@ -627,6 +629,12 @@ void sh::run(){
         return;
     }
 
+    clearenv();
+
+    for (int i = 0; i < (int) this->envVals.size(); i++){
+		setenv(this->envVals[i].name.c_str(), this->envVals[i].value.c_str(), 1);
+	}
+
     string input;
     char readbuf[15000];
 
@@ -679,11 +687,17 @@ void sh::run(){
         bool trigger = false;
 
         if(this->parse[0] == "setenv"){
+            envVal new_envVal;
+            new_envVal.name = this->parse[1];
+            new_envVal.value = this->parse[2];
+            this->envVals.push_back(new_envVal);
             setenv(this->parse[1].c_str(), this->parse[2].c_str(), 1);
             trigger = true;
         }else if(this->parse[0] == "printenv"){
+            string msg;
             if (getenv(this->parse[1].c_str()) != NULL)
-                cout << getenv(this->parse[1].c_str()) << endl;
+                msg = getenv(this->parse[1].c_str());
+			    broadcast(NULL, &servingID, msg + "\n");
             trigger = true;
         }else if(this->parse[0] == "who"){
             who();

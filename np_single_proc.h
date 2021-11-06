@@ -7,6 +7,7 @@
 #include <sys/wait.h>
 #include <sys/socket.h>
 #include <sys/select.h>
+#include <stdlib.h>
 #include <fcntl.h>
 #include <unistd.h>
 #include <cstring>
@@ -36,6 +37,11 @@ typedef struct userPipe{
 	int fd[2];
 } userPipe;
 
+typedef struct envVal{
+	string name;
+	string value;
+} envVal;
+
 int create_socket(unsigned short port);
 
 int new_user(int msock);
@@ -64,6 +70,8 @@ class sh{
         void parser(string input, int start, int end);
         /* Exec the command */
         int execCmd(string input);
+
+        vector<envVal> envVals;
     public:
         /* allocate for new user */
         void allocate(int ssock, struct sockaddr_in sin_);
