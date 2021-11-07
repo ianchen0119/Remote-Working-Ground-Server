@@ -29,6 +29,8 @@ typedef struct cmdBlock{
     int start = 0;
     /* end pos */
     int end = 0;
+    /* user pipe */
+    int fd_in = -1;
 } cmdBlock;
 
 typedef struct userPipe{
