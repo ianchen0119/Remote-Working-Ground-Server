@@ -45,8 +45,6 @@ int main(int argc, char *argv[]){
     FD_ZERO(&activefds);
 	FD_ZERO(&readfds);
 
-    clearenv();
-
     if (argc != 2){
 		return 0;
     }
@@ -113,7 +111,6 @@ void sh::allocate(int ssock_, struct sockaddr_in sin_){
     this->isDone = true;
     this->address = inet_ntoa(sin_.sin_addr);
     this->address += ":" + to_string(htons(sin_.sin_port));
-    setenv("PATH", "bin:.", 1);
     envVal new_envVal;
     new_envVal.name = "PATH";
     new_envVal.value = "bin:.";
@@ -303,6 +300,7 @@ void sh::cmdBlockGen(string input){
     int n = 1;
     int prevSymbol = empty_;
     this->cmdBlockSet[this->cmdBlockCount - 1].start = count;
+    this->cmdBlockSet[this->cmdBlockCount - 1].fd_in = -1;
     while(input[count] != '\0'){
         switch(input[count]){
             case '!':
@@ -325,31 +323,37 @@ void sh::cmdBlockGen(string input){
                         if(this->timerArr[k] != -1 && this->timerArr[k] == countNumi){
                             this->cmdBlockSet[this->cmdBlockCount - 1].num = k;
                             this->timerArr[k] = countNumi;
-                            this->cmdBlockSet[this->cmdBlockCount - 1].end = count - 1;
+                            if(this->cmdBlockSet[0].fd_in == -1 || this->cmdBlockCount > 1){
+                                this->cmdBlockSet[this->cmdBlockCount - 1].end = count - 1;
+                            }
                             return;
                         }
                     }
                     if(emptySpace < 0){
 #ifdef DEBUG
                         cerr << "have no buffer to store the info, related to numbered pipe cmd" << endl;
+#endif
                         for(;;){
 
-                        }  
-#endif
+                        } 
                     }
                     this->cmdBlockSet[this->cmdBlockCount - 1].num = emptySpace;
                     if(pipe(this->numPipefds[this->cmdBlockSet[this->cmdBlockCount - 1].num]) < 0){
 #ifdef DEBUG
-                    cerr << "err! [2]" << endl;
+                        cerr << "err! [pipe]" << endl;
 #endif
                     }
                     this->timerArr[emptySpace] = countNumi;
-                    this->cmdBlockSet[this->cmdBlockCount - 1].end = count - 1;
+                    if(this->cmdBlockSet[0].fd_in == -1 || this->cmdBlockCount > 1){
+                        this->cmdBlockSet[this->cmdBlockCount - 1].end = count - 1;
+                    }
                     return;
                 }else{
                     prevSymbol = pipe_;
                     this->cmdBlockSet[this->cmdBlockCount - 1].next = prevSymbol;
-                    this->cmdBlockSet[this->cmdBlockCount - 1].end = count - 1;
+                    if(this->cmdBlockSet[0].fd_in == -1 || this->cmdBlockCount > 1){
+                        this->cmdBlockSet[this->cmdBlockCount - 1].end = count - 1;
+                    }
                     this->cmdBlockCount++;
                     this->cmdBlockSet[this->cmdBlockCount - 1].start = count + 1;
                 }
@@ -365,7 +369,9 @@ void sh::cmdBlockGen(string input){
                         n++;
                     }
                     int targetUserID = (targetUser == "")?(1):(stoi(targetUser) - 1);
-                    this->cmdBlockSet[this->cmdBlockCount - 1].end = count - 1;
+                    if(this->cmdBlockSet[0].fd_in == -1 || this->cmdBlockCount > 1){
+                        this->cmdBlockSet[this->cmdBlockCount - 1].end = count - 1;
+                    }
                     string msg = input.substr(0, input.length() - n - 1);
                     if(createUserPipe(this->id, targetUserID, msg) < 0){
                         this->cmdBlockSet[this->cmdBlockCount - 1].next = notExist_;
@@ -376,7 +382,9 @@ void sh::cmdBlockGen(string input){
                 }else{
                     prevSymbol = redirOut_;
                     this->cmdBlockSet[this->cmdBlockCount - 1].next = prevSymbol;
-                    this->cmdBlockSet[this->cmdBlockCount - 1].end = count - 1;
+                    if(this->cmdBlockSet[0].fd_in == -1 || this->cmdBlockCount > 1){
+                        this->cmdBlockSet[this->cmdBlockCount - 1].end = count - 1;
+                    }
                     this->cmdBlockCount++;
                     // next cmdBlock
                     this->cmdBlockSet[this->cmdBlockCount - 1].start = count + 1;
@@ -393,14 +401,18 @@ void sh::cmdBlockGen(string input){
                         n++;
                     }
                     int targetUserID = (targetUser == "")?(1):(stoi(targetUser) - 1);
-                    this->cmdBlockSet[this->cmdBlockCount - 1].end = count - 1;
+                    if(prevSymbol == redirIn_){
+                        this->cmdBlockSet[this->cmdBlockCount - 1].end = count - 1;
+                    }else{
+                        this->cmdBlockCount--;
+                    }
                     string msg = input.substr(0, input.length() - n - 1);
                     if(receiveFromUserPipe(targetUserID, this->id, msg) < 0){
                         this->cmdBlockSet[this->cmdBlockCount - 1].next = notExist_;
                         return;
                     }
-                    this->cmdBlockSet[this->cmdBlockCount - 1].num = targetUserID;
-                    return;
+                    this->cmdBlockSet[0].fd_in = targetUserID;
+                    count += n;
                 }
                 break;
             default:
@@ -409,7 +421,9 @@ void sh::cmdBlockGen(string input){
         count++;
     }
     this->cmdBlockSet[this->cmdBlockCount - 1].prev = prevSymbol;
-    this->cmdBlockSet[this->cmdBlockCount - 1].end = count;
+    if(prevSymbol == empty_){
+        this->cmdBlockSet[this->cmdBlockCount - 1].end = count;
+    }
     this->cmdBlockSet[this->cmdBlockCount - 1].next = empty_;
     
 }
@@ -484,8 +498,8 @@ redo:
             }
 
             /* user pipe */
-            if(this->cmdBlockSet[i].next == redirIn_){
-                int index = this->cmdBlockSet[i].num;
+            if(this->cmdBlockSet[i].fd_in > -1){
+                int index = this->cmdBlockSet[i].fd_in;
                 for (int i = 0; i < (int) userPipeVector.size(); i++){
                     if (userPipeVector[i].sourceID == index && userPipeVector[i].targetID == this->id){
                         close(userPipeVector[i].fd[1]);
@@ -497,7 +511,7 @@ redo:
             
             int status;
             int next = (int)this->cmdBlockSet[i].next;
-            if(next <= 2 || next >= 6){
+            if(next <= 2 || next >= 4){
                 waitpid(pid, &status, 0);
             }
 
@@ -582,8 +596,8 @@ redo:
                 }
             }
 
-            if(this->cmdBlockSet[i].next == redirIn_){
-                int index = this->cmdBlockSet[i].num;
+            if(this->cmdBlockSet[i].fd_in > -1){
+                int index = this->cmdBlockSet[i].fd_in;
                 for (int i = 0; i < (int) userPipeVector.size(); i++){
                     if (userPipeVector[i].sourceID == index && userPipeVector[i].targetID == this->id){
                         close(userPipeVector[i].fd[1]);
