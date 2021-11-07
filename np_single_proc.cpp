@@ -45,8 +45,6 @@ int main(int argc, char *argv[]){
     FD_ZERO(&activefds);
 	FD_ZERO(&readfds);
 
-    clearenv();
-
     if (argc != 2){
 		return 0;
     }
@@ -113,7 +111,6 @@ void sh::allocate(int ssock_, struct sockaddr_in sin_){
     this->isDone = true;
     this->address = inet_ntoa(sin_.sin_addr);
     this->address += ":" + to_string(htons(sin_.sin_port));
-    setenv("PATH", "bin:.", 1);
     envVal new_envVal;
     new_envVal.name = "PATH";
     new_envVal.value = "bin:.";
@@ -395,6 +392,7 @@ void sh::cmdBlockGen(string input){
                 break;
             case '<':
                 this->cmdBlockSet[this->cmdBlockCount - 1].prev = prevSymbol;
+                prevSymbol = redirIn_;
                 if(49 <= (int)input[count + 1] && (int)input[count + 1] <= 57){
                     string targetUser;
                     this->cmdBlockSet[this->cmdBlockCount - 1].next = prevSymbol;
@@ -403,7 +401,7 @@ void sh::cmdBlockGen(string input){
                         n++;
                     }
                     int targetUserID = (targetUser == "")?(1):(stoi(targetUser) - 1);
-                    if(prevSymbol == empty_){
+                    if(prevSymbol == redirIn_){
                         this->cmdBlockSet[this->cmdBlockCount - 1].end = count - 1;
                     }else{
                         this->cmdBlockCount--;
@@ -423,7 +421,7 @@ void sh::cmdBlockGen(string input){
         count++;
     }
     this->cmdBlockSet[this->cmdBlockCount - 1].prev = prevSymbol;
-    if(this->cmdBlockCount > 1){
+    if(prevSymbol == empty_){
         this->cmdBlockSet[this->cmdBlockCount - 1].end = count;
     }
     this->cmdBlockSet[this->cmdBlockCount - 1].next = empty_;
@@ -513,7 +511,7 @@ redo:
             
             int status;
             int next = (int)this->cmdBlockSet[i].next;
-            if(next <= 2 || next >= 6){
+            if(next <= 2 || next >= 4){
                 waitpid(pid, &status, 0);
             }
 
