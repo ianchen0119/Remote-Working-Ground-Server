@@ -20,7 +20,7 @@ using namespace std;
 
 typedef struct cmdBlock{
     /* numbered pipe */
-    int8_t num;
+    int num;
     /* prev symbol */
     int8_t prev = 0;
     /* next symbol */
@@ -31,6 +31,7 @@ typedef struct cmdBlock{
     int end = 0;
     /* user pipe */
     int fd_in = -1;
+    int fd_out = -1;
 } cmdBlock;
 
 typedef struct userPipe{
@@ -61,6 +62,7 @@ class sh{
         int numPipefds[MAX_NUMPIPE][2];
         /* For numbered pipe */
         int timerArr[MAX_NUMPIPE] = {0};
+        string pipeMsg[2];
 
         /* === Functions === */
 
