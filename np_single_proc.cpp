@@ -224,15 +224,16 @@ void logout(int id){
 
 int createUserPipe(int sou, int des, string msg_){
     int index;
+    int res;
     if(des < 0 || des > 29 || !instanceArr[des].isAllocated){
         string msg = "*** Error: user #" + to_string(des + 1) + " does not exist yet. ***\n";
         broadcast(NULL, &sou, msg);
-        return -1;
+        res = -1;
     }else{
         if(checkUserPipe(index, sou, des)){
             string msg = "*** Error: the pipe #" + to_string(sou + 1) + "->#" + to_string(des + 1) + " already exists. ***\n";
             broadcast(NULL, &sou, msg);
-            return -1;
+            res = -1;
         }else{
             string msg = "*** " + instanceArr[sou].name + " (#" + to_string(sou + 1) + ") just piped '" + msg_ + "' to "
 							+ instanceArr[des].name + " (#" + to_string(des + 1) + ") ***\n";
@@ -247,24 +248,25 @@ int createUserPipe(int sou, int des, string msg_){
                 }
             }
             userPipeVector.push_back(newElement);
+            res = 0;
         }
     }
-    return 0;
+    return res;
 }
 
 int receiveFromUserPipe(int sou, int des, string msg_){
     int index;
-    if(des < 0 || des > 29 || !instanceArr[des].isAllocated){
-        string msg = "*** Error: user #" + to_string(des + 1) + " does not exist yet. ***\n";
-        broadcast(NULL, &sou, msg);
+    if(sou < 0 || sou > 29 || !instanceArr[sou].isAllocated){
+        string msg = "*** Error: user #" + to_string(sou + 1) + " does not exist yet. ***\n";
+        broadcast(NULL, &des, msg);
         return -1;
     }else{
         if(checkUserPipe(index, sou, des)){
-            string msg = "*** " + instanceArr[sou].name + " (#" + to_string(sou + 1) + ") just received from "
-							+ instanceArr[des].name + " (#" + to_string(des + 1) + ") by '" + msg_ + "' ***\n";
+            string msg = "*** " + instanceArr[des].name + " (#" + to_string(des + 1) + ") just received from "
+							+ instanceArr[sou].name + " (#" + to_string(sou + 1) + ") by '" + msg_ + "' ***\n";
 			broadcast(NULL, NULL, msg);
         }else{
-            string msg = "*** Error: the pipe #" + to_string(des + 1) + "->#" + to_string(sou + 1) + " does not exist yet. ***\n";
+            string msg = "*** Error: the pipe #" + to_string(sou + 1) + "->#" + to_string(des + 1) + " does not exist yet. ***\n";
 			broadcast(NULL, &des, msg);
             return -1;
         }
@@ -299,7 +301,7 @@ void sh::cmdBlockGen(string input){
     int n = 1;
     int prevSymbol = empty_;
     string targetUser;
-    while(input[count] != '\0'){
+    while(count < (int) input.length()){
         switch(input[count]){
             case '!':
             case '|':
@@ -415,7 +417,7 @@ void sh::cmdBlockGen(string input){
         this->cmdBlockSet[this->cmdBlockCount - 1].prev = prevSymbol;
         this->cmdBlockSet[this->cmdBlockCount - 1].next = empty_;
     }
-    
+    return;
 }
 
 void sh::parser(string input, int start, int end){
@@ -459,12 +461,15 @@ int sh::execCmd(string input){
 
         this->parse.clear();
 
+        bool jumpCat = false;
+
         if(this->cmdBlockSet[i].fd_in > -1){
             if(receiveFromUserPipe(this->cmdBlockSet[i].fd_in, this->id, this->pipeMsg[0]) < 0){
                 close(this->pipefds[!p][0]);
                 close(this->pipefds[p][0]);
                 close(this->pipefds[!p][1]);
                 close(this->pipefds[p][1]);
+                jumpCat = true;
             }
         }
 
@@ -474,6 +479,7 @@ int sh::execCmd(string input){
                 close(this->pipefds[p][0]);
                 close(this->pipefds[!p][1]);
                 close(this->pipefds[p][1]);
+                jumpCat = true;
             }
         }
 
@@ -545,7 +551,6 @@ redo:
                 close(this->pipefds[!p][0]);
                 close(this->pipefds[p][0]);
                 dup2(this->pipefds[p][1] ,STDOUT_FILENO);
-                // dup2(this->pipefds[p][1] ,STDERR_FILENO);
                 close(this->pipefds[p][1]);
             }
 
@@ -563,7 +568,6 @@ redo:
                 close(this->pipefds[!p][1]);
                 close(this->pipefds[p][0]);
                 dup2(this->pipefds[p][1] ,STDOUT_FILENO);
-                // dup2(this->pipefds[p][1] ,STDERR_FILENO);
                 close(this->pipefds[p][1]);
             }
 
@@ -584,6 +588,7 @@ redo:
                     close(this->numPipefds[k][0]);
                 }
             }
+
 
             /* user pipe */
             if(this->cmdBlockSet[i].fd_out > -1){
@@ -624,6 +629,10 @@ redo:
                 exit(0);
             }
 
+            if(jumpCat){
+                exit(0);
+            }
+
             /* exec */
             if(execvp(this->execArg[0], this->execArg)){
                     cerr << "Unknown command: [" << this->execArg[0] << "]." << endl;
@@ -633,9 +642,19 @@ redo:
 
     }
 
+    for(int i = 0; i < this->cmdBlockCount; i++){
+            this->cmdBlockSet[i].num = 0;
+            this->cmdBlockSet[i].prev = 0;
+            this->cmdBlockSet[i].next = 0;
+            this->cmdBlockSet[i].start = 0;
+            this->cmdBlockSet[i].end = 0;
+            this->cmdBlockSet[i].fd_in = -1;
+            this->cmdBlockSet[i].fd_out = -1;
+    }
+
     for(int k = 0; k < MAX_NUMPIPE; k++){
-                this->timerArr[k] = (this->timerArr[k] == -1)?(-1):(this->timerArr[k] - 1);
-            }
+        this->timerArr[k] = (this->timerArr[k] == -1)?(-1):(this->timerArr[k] - 1);
+    }
 
     return 0;
 }
@@ -687,7 +706,6 @@ void sh::run(){
             
         if(this->parse[0] == "exit" || this->parse[0] == "EOF"){
             logout(this->id);
-            int status;
             FD_CLR(this->ssock, &activefds);
             close(this->ssock);
             this->parse.clear();
@@ -702,7 +720,6 @@ void sh::run(){
                     userPipeVector.erase(userPipeVector.begin() + i);
                 }
             }
-            while(waitpid(-1, &status, WNOHANG) > 0){}
             return;
         }
             
@@ -761,15 +778,6 @@ void sh::run(){
         this->parse.clear();
         this->cmdBlockGen(input);
         this->execCmd(input);
-        for(int i = 0; i < this->cmdBlockCount; i++){
-            this->cmdBlockSet[i].num = 0;
-            this->cmdBlockSet[i].prev = 0;
-            this->cmdBlockSet[i].next = 0;
-            this->cmdBlockSet[i].start = 0;
-            this->cmdBlockSet[i].end = 0;
-            this->cmdBlockSet[i].fd_in = -1;
-            this->cmdBlockSet[i].fd_out = -1;
-        }
         input.clear();
         this->isDone = true;
         return;

@@ -22,9 +22,9 @@ typedef struct cmdBlock{
     /* numbered pipe */
     int num;
     /* prev symbol */
-    int8_t prev = 0;
+    int prev = 0;
     /* next symbol */
-    int8_t next = 0;
+    int next = 0;
     /* start pos */
     int start = 0;
     /* end pos */
