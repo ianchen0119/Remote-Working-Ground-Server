@@ -16,6 +16,8 @@ using namespace std;
 // >n
 #define userPipe_ 6
 
+const int FD_NULL = open("/dev/null", O_RDWR);
+
 vector <userPipe> userPipeVector;
 sh instanceArr[30];
 fd_set activefds, readfds;
@@ -444,12 +446,7 @@ int sh::execCmd(string input){
 #endif
     }
     for(; i < this->cmdBlockCount; i++){
-#ifdef DEBUG
-        cout << "Block" << i << ".prev: "  << (int)cmdBlockSet[i].prev << endl;
-        cout << "Block" << i << ".next: "  << (int)cmdBlockSet[i].next << endl;
-        cout << "Block" << i << ".start: "  << cmdBlockSet[i].start << endl;
-        cout << "Block" << i << ".end: "  << cmdBlockSet[i].end << endl;
-#endif
+        
         this->parser(input, this->cmdBlockSet[i].start, this->cmdBlockSet[i].end);
 
         int j = 0;
@@ -461,25 +458,15 @@ int sh::execCmd(string input){
 
         this->parse.clear();
 
-        bool jumpCat = false;
-
         if(this->cmdBlockSet[i].fd_in > -1){
             if(receiveFromUserPipe(this->cmdBlockSet[i].fd_in, this->id, this->pipeMsg[0]) < 0){
-                close(this->pipefds[!p][0]);
-                close(this->pipefds[p][0]);
-                close(this->pipefds[!p][1]);
-                close(this->pipefds[p][1]);
-                jumpCat = true;
+                this->cmdBlockSet[i].fd_in = -2;
             }
         }
 
         if(this->cmdBlockSet[i].fd_out > -1){
             if(createUserPipe(this->id, this->cmdBlockSet[i].fd_out, this->pipeMsg[1]) < 0){
-                close(this->pipefds[!p][0]);
-                close(this->pipefds[p][0]);
-                close(this->pipefds[!p][1]);
-                close(this->pipefds[p][1]);
-                jumpCat = true;
+                this->cmdBlockSet[i].fd_out = -2;
             }
         }
 
@@ -540,7 +527,16 @@ redo:
         }else{
             // child
 
-            dup2(instanceArr[this->id].ssock, STDOUT_FILENO);
+            if(this->cmdBlockSet[i].fd_out < -1){
+                dup2(FD_NULL, STDOUT_FILENO);
+            }else{
+                dup2(instanceArr[this->id].ssock, STDOUT_FILENO);
+            }
+
+            if(this->cmdBlockSet[i].fd_in < -1){
+                dup2(FD_NULL, STDIN_FILENO);
+            }
+            
 			dup2(instanceArr[this->id].ssock, STDERR_FILENO);
 
             close(instanceArr[this->id].ssock);
@@ -626,10 +622,6 @@ redo:
             }
 
             if(this->cmdBlockSet[i].prev == redirOut_){
-                exit(0);
-            }
-
-            if(jumpCat){
                 exit(0);
             }
 
