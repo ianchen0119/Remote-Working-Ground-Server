@@ -1,12 +1,11 @@
 #include "np_multi_proc.h"
-
 using namespace std;
+
+// ./demo.sh ../310551012_np_project2/np_multi_proc 12330
 
 const int FD_NULL = open("/dev/null", O_RDWR);
 
 vector <userPipe> userPipeVector;
-fd_set activefds, readfds;
-int servingID = 0;
 
 /*
  *  Allocate a shared memory, that be used to store user informations for each user.
@@ -15,7 +14,7 @@ void shm_init(void){
     int shmid = 0;
     user *userTable;
 
-    if(shmid = shmget(SHMKEY, MAX_USER * sizeof(user), PERM | IPC_CREAT) < 0){
+    if((shmid = shmget(SHMKEY, MAX_USER * sizeof(user), PERM | IPC_CREAT)) < 0){
         cerr << "server err: shmget failed (errno #" << errno << ")" << endl;
         exit(1);
     }
@@ -30,58 +29,101 @@ void shm_init(void){
     shmdt(userTable);
 }
 
+void shm_destroy(int sig)
+{
+	if(sig == SIGCHLD){
+		while (waitpid(-1, NULL, WNOHANG) > 0);
+	}else if(sig == SIGINT || sig == SIGQUIT || sig == SIGTERM){
+		int	shmid;
+		if((shmid = shmget(SHMKEY, MAX_USER * sizeof (user), PERM)) < 0){
+			cerr << "server err: shmget failed" << endl;
+			exit (1);
+		}
+		if(shmctl(shmid, IPC_RMID, NULL) < 0){
+            cerr << "server err: shmctl IPC_RMID failed" << endl;
+			exit (1);
+		}
+		exit (0);
+	}
+	signal(sig, shm_destroy);
+}
+
 int main(int argc, char *argv[]){
+
+    signal (SIGCHLD, shm_destroy);
+	signal (SIGINT, shm_destroy);
+	signal (SIGQUIT, shm_destroy);
+	signal (SIGTERM, shm_destroy);
+
+    sh instance;
+    struct sockaddr_in sin;
+    unsigned int alen = sizeof(sin);
+    int ssock, c_pid;
 
     if (argc != 2){
 		return 0;
     }
     
     unsigned short port = (unsigned short)atoi(argv[1]);
+    
+    shm_init();
 
 	int msock = create_socket(port);
 	listen(msock, MAX_USER);
-    struct sockaddr_in sin;
-    unsigned int alen = sizeof(sin);
-    sh instance = sh();
-    int ssock, c_pid;
 	while((ssock = accept(msock, (struct sockaddr *)&sin, &alen))){
         switch(c_pid = fork()){
-        case 0:
-            dup2(ssock, STDIN_FILENO);
-			dup2(ssock, STDOUT_FILENO);
-			dup2(ssock, STDERR_FILENO);
-            instance.run(&sin);
-			close(msock);
-            close(ssock);
-            exit(0);
-        default:
-            close(ssock);
+            case 0:
+                dup2(ssock, STDIN_FILENO);
+                dup2(ssock, STDOUT_FILENO);
+                dup2(ssock, STDERR_FILENO);
+                close(msock);
+                instance.run(sin);
+                close(ssock);
+                exit(0);
+            default:
+                close(ssock);
         }
 	}
     return 0;
 }
 
-void sh::allocate(struct sockaddr_in sin_){
-    this->isAllocated = true;
-    this->address = inet_ntoa(sin_.sin_addr);
-    this->address += ":" + to_string(htons(sin_.sin_port));
-    this->isDone = true;
-    envVal new_envVal;
-    new_envVal.name = "PATH";
-    new_envVal.value = "bin:.";
-    this->envVals.push_back(new_envVal);
+socketFunction::socketFunction(){
+    int shmid = 0;
 
-    for(int k = 0; k < MAX_NUMPIPE; k++){
-        this->timerArr[k] = -1;
+    if((shmid = shmget(SHMKEY, MAX_USER * sizeof(user), PERM)) < 0){
+        cerr << "server err: shmget failed (errno #" << errno << ")" << endl;
+        exit(1);
+    }
+
+    if((userTable = (user*) shmat(shmid, NULL, 0)) == (user*) -1){
+        cerr << "server err: shmat faild" << endl;
+        exit(1);
+    }
+}
+
+void socketFunction::allocate(struct sockaddr_in sin_){
+    for (int i = 0; i < MAX_USER; i++){
+        if(!userTable[i].isAllocated){
+            userTable[i].isAllocated = true;
+            strncpy(userTable[i].address, inet_ntoa(sin_.sin_addr), sizeof(userTable[i].address) - 1);
+            userTable[i].address[sizeof(userTable[i].address) - 1] = '\0';
+            userTable[i].pid = (int) getpid();
+            userTable[i].id = i;
+            userTable[i].port = htons(sin_.sin_port);
+            mID = i;
+            welcome(userTable[i].id);
+            login(userTable[i].id);
+            break;
+        }else{
+            continue;
+        }
     }
 }
 
 int create_socket(unsigned short port){
     int msock;
 	if ((msock = socket(AF_INET, SOCK_STREAM, 0)) < 0){
-#ifdef DEBUG
 		cerr << "Socket create fail.\n";
-#endif
 		exit(0);
 	}
 	struct sockaddr_in sin;
@@ -92,17 +134,14 @@ int create_socket(unsigned short port){
     sin.sin_port = htons(port);
 
 	if (bind(msock, (struct sockaddr *)&sin, sizeof(sin)) < 0){
-#ifdef DEBUG
 		cerr << "Socket bind fail.\n";
-#endif
 		exit(0);
 	}
-    FD_SET(msock, &activefds);
 	return msock;
 }
 
 int socketFunction::getMyID(void){
-    return this->id;
+    return this->mID;
 }
 
 user* socketFunction::getUserTable(void){
@@ -114,63 +153,85 @@ socketFunction& socketFunction::getInstance(){
     return instance;
 }
 
-void socketFunction::broadcast(int *sou, int *des, string msg_){
-	const char *msg = msg_.c_str();
-	char unit;
+string socketFunction::getName(string name_){
+    if (name_ == "")
+        return "(no name)";
+
+    return name_;
+}
+
+void socketFunction::broadcast(int *des, string msg_){
 	if (des == NULL){
-		for (int i = 0; i < 30; i++){
-			if (instanceArr[i].isAllocated){
-				write(instanceArr[i].ssock, msg, sizeof(unit) * msg_.length());
+		for (int i = 0; i < MAX_USER; i++){
+			if (userTable[i].isAllocated){
+                for(int j = 0; j < MAX_MSG_NUM; j++){
+                    if(userTable[i].msg[mID][j][0] == 0){
+                        strncpy(userTable[i].msg[mID][j], msg_.c_str(), MAX_MSG_SIZE + 1);
+                        kill(userTable[i].pid, SIGUSR1);
+                        break;
+                    }
+                }
 			}
 		}
 	} else {
-		write(instanceArr[*des].ssock, msg, sizeof(unit) * msg_.length());
+        if (*des == mID){
+            write(STDOUT_FILENO, msg_.c_str(), sizeof(char) * msg_.length());
+        }else{
+            for (int i = 0; i < MAX_MSG_NUM; i++){
+                if(userTable[*des].msg[*des][i][0] == 0){
+                    strncpy(userTable[*des].msg[mID][i], msg_.c_str(), MAX_MSG_SIZE + 1);
+                    kill(userTable[*des].pid, SIGUSR1);
+                    break;
+                }
+            }
+        }
 	}
 }
 
 void socketFunction::who(){
 	string msg = "<ID>\t<nickname>\t<IP:port>\t<indicate me>\n";
-	for (int i = 0; i < 30; i++){
-		if (instanceArr[i].isAllocated){
-			msg += to_string(instanceArr[i].id + 1) + "\t" + instanceArr[i].name + "\t" + instanceArr[i].address;
-			if (instanceArr[i].id == servingID){
+	for (int i = 0; i < MAX_USER; i++){
+		if (userTable[i].isAllocated){
+			msg += to_string(userTable[i].id + 1) + "\t" + getName(userTable[i].name) + "\t" + string(userTable[i].address) + ":" + to_string(userTable[i].port);
+			if (userTable[i].id == mID){
 				msg += "\t<-me";
 			}
 			msg += "\n";
 		}
 	}
-	broadcast(NULL, &servingID, msg);
+	broadcast(&mID, msg);
 }
 
 void socketFunction::tell(int targetID, string msg){
-	if (instanceArr[targetID].isAllocated){
-		msg = "*** " + instanceArr[servingID].name + " told you ***: " + msg + "\n";
-		broadcast(NULL, &targetID, msg);
+	if (userTable[targetID].isAllocated){
+		msg = "*** " + getName(userTable[mID].name) + " told you ***: " + msg + "\n";
+		broadcast(&targetID, msg);
 	} else {
 		msg = "*** Error: user #" + to_string(targetID + 1) + " does not exist yet. ***\n";
-		broadcast(NULL, &servingID, msg);
+		broadcast(&mID, msg);
 	}
 }
 
 void socketFunction::yell(string msg){
-	msg = "*** " + instanceArr[servingID].name + " yelled ***: " + msg + "\n";
-	broadcast(NULL, NULL, msg);
+	msg = "*** " + getName(userTable[mID].name) + " yelled ***: " + msg + "\n";
+	broadcast(NULL, msg);
 }
 
 void socketFunction::setName(string newName){
 	for (int i = 0; i < 30; i++){
-		if (i == servingID){
+		if (i == mID){
 			continue;
 		}
-		if (instanceArr[i].isAllocated && instanceArr[i].name == newName){
+		if (userTable[i].isAllocated && userTable[i].name == newName){
 			string msg = "*** User '" + newName + "' already exists. ***\n";
-			broadcast(NULL, &servingID, msg);
+			broadcast(&mID, msg);
 			return;
 		}
 	}
-	instanceArr[servingID].name = newName;
-	string msg = "*** User from " + instanceArr[servingID].address + " is named '" + instanceArr[servingID].name + "'. ***\n";
-	broadcast(NULL, NULL, msg);
+    memset(userTable[mID].name, 0, sizeof(userTable[mID].name));
+    strncpy(userTable[mID].name, newName.c_str(),newName.length());
+	string msg = "*** User from " + string(userTable[mID].address) + ":" + to_string(userTable[mID].port) + " is named '" + newName + "'. ***\n";
+	broadcast(NULL, msg);
 }
 
 void socketFunction::welcome(int id){
@@ -178,35 +239,41 @@ void socketFunction::welcome(int id){
 	msg = msg + "****************************************\n"
 			  + "** Welcome to the information server. **\n"
 			  + "****************************************\n";
-	broadcast(NULL, &id, msg);
+	broadcast(&id, msg);
 }
 
 void socketFunction::login(int id){
-	string msg = "*** User '" + instanceArr[id].name + "' entered from " + instanceArr[id].address + ". ***\n";
-	broadcast(NULL, NULL, msg);
+	string msg = "*** User '" + getName(userTable[id].name) + "' entered from " + userTable[id].address + ":" + to_string(userTable[id].port) + ". ***\n";
+	broadcast(NULL, msg);
 }
 
 void socketFunction::logout(int id){
-	string msg = "*** User '" + instanceArr[id].name + "' left. ***\n";
-	broadcast(NULL, NULL, msg);
+	string msg = "*** User '" + getName(userTable[id].name) + "' left. ***\n";
+	broadcast(NULL, msg);
+    memset(&userTable[id], 0, sizeof(user));
+    close (STDIN_FILENO);
+    close (STDOUT_FILENO);
+    close (STDERR_FILENO);
+    shmdt(userTable);
 }
 
-int socketFunction::createUserPipe(int sou, int des, string msg_){
+int socketFunction::createUserPipe(int des, string msg_){
     int index;
+    int sou = mID;
     int res;
-    if(des < 0 || des > 29 || !instanceArr[des].isAllocated){
+    if(des < 0 || des > 29 || !userTable[des].isAllocated){
         string msg = "*** Error: user #" + to_string(des + 1) + " does not exist yet. ***\n";
-        broadcast(NULL, &sou, msg);
+        broadcast(&sou, msg);
         res = -1;
     }else{
         if(checkUserPipe(index, sou, des)){
             string msg = "*** Error: the pipe #" + to_string(sou + 1) + "->#" + to_string(des + 1) + " already exists. ***\n";
-            broadcast(NULL, &sou, msg);
+            broadcast(&sou, msg);
             res = -1;
         }else{
-            string msg = "*** " + instanceArr[sou].name + " (#" + to_string(sou + 1) + ") just piped '" + msg_ + "' to "
-							+ instanceArr[des].name + " (#" + to_string(des + 1) + ") ***\n";
-            broadcast(NULL, NULL, msg);
+            string msg = "*** " + getName(userTable[sou].name) + " (#" + to_string(sou + 1) + ") just piped '" + msg_ + "' to "
+							+ userTable[des].name + " (#" + to_string(des + 1) + ") ***\n";
+            broadcast(NULL, msg);
             userPipe newElement;
             newElement.sourceID = sou;
             newElement.targetID = des;
@@ -223,20 +290,21 @@ int socketFunction::createUserPipe(int sou, int des, string msg_){
     return res;
 }
 
-int socketFunction::receiveFromUserPipe(int sou, int des, string msg_){
+int socketFunction::receiveFromUserPipe(int sou, string msg_){
     int index;
-    if(sou < 0 || sou > 29 || !instanceArr[sou].isAllocated){
+    int des = mID;
+    if(sou < 0 || sou > 29 || !userTable[sou].isAllocated){
         string msg = "*** Error: user #" + to_string(sou + 1) + " does not exist yet. ***\n";
-        broadcast(NULL, &des, msg);
+        broadcast(&des, msg);
         return -1;
     }else{
         if(checkUserPipe(index, sou, des)){
-            string msg = "*** " + instanceArr[des].name + " (#" + to_string(des + 1) + ") just received from "
-							+ instanceArr[sou].name + " (#" + to_string(sou + 1) + ") by '" + msg_ + "' ***\n";
-			broadcast(NULL, NULL, msg);
+            string msg = "*** " + getName(userTable[des].name) + " (#" + to_string(des + 1) + ") just received from "
+							+ userTable[sou].name + " (#" + to_string(sou + 1) + ") by '" + msg_ + "' ***\n";
+			broadcast(NULL, msg);
         }else{
             string msg = "*** Error: the pipe #" + to_string(sou + 1) + "->#" + to_string(des + 1) + " does not exist yet. ***\n";
-			broadcast(NULL, &des, msg);
+			broadcast(&des, msg);
             return -1;
         }
     }
@@ -263,8 +331,8 @@ void sig_handler(int sig){
 		for (i = 0; i < MAX_USER; ++i) {
 			for (j = 0; j < MAX_MSG_NUM; ++j) {
 				if (userTable[uid].msg[i][j][0] != 0) {
-					write(STDOUT_FILENO, userTable[uid].msg[i][j].c_str(), userTable[uid].msg[i][j].length());
-                    userTable[uid].msg[i][j].clear();
+                    write(STDOUT_FILENO, userTable[uid].msg[i][j], strlen (userTable[uid].msg[i][j]));
+					memset (userTable[uid].msg[i][j], 0, MAX_MSG_SIZE);
 				}
 			}
 		}
@@ -277,8 +345,7 @@ void sh::prompt(){
     if(this->isDone){
         /* Data reset */
         this->cmdBlockCount = 1;
-        string msg = "% ";
-        broadcast(NULL, &this->id, msg);
+        cout << "% ";
         this->isDone = false;
     }
 }
@@ -444,13 +511,13 @@ int sh::execCmd(string input){
         this->parse.clear();
 
         if(this->cmdBlockSet[i].fd_in > -1){
-            if(receiveFromUserPipe(this->cmdBlockSet[i].fd_in, this->id, this->pipeMsg[0]) < 0){
+            if(socketFunction::getInstance().receiveFromUserPipe(this->cmdBlockSet[i].fd_in, this->pipeMsg[0]) < 0){
                 this->cmdBlockSet[i].fd_in = -2;
             }
         }
 
         if(this->cmdBlockSet[i].fd_out > -1){
-            if(createUserPipe(this->id, this->cmdBlockSet[i].fd_out, this->pipeMsg[1]) < 0){
+            if(socketFunction::getInstance().createUserPipe(this->cmdBlockSet[i].fd_out, this->pipeMsg[1]) < 0){
                 this->cmdBlockSet[i].fd_out = -2;
             }
         }
@@ -514,17 +581,11 @@ redo:
 
             if(this->cmdBlockSet[i].fd_out < -1){
                 dup2(FD_NULL, STDOUT_FILENO);
-            }else{
-                dup2(instanceArr[this->id].ssock, STDOUT_FILENO);
             }
 
             if(this->cmdBlockSet[i].fd_in < -1){
                 dup2(FD_NULL, STDIN_FILENO);
             }
-            
-			dup2(instanceArr[this->id].ssock, STDERR_FILENO);
-
-            close(instanceArr[this->id].ssock);
 
             if(this->cmdBlockSet[i].next == pipe_ && this->cmdBlockSet[i].prev == pipe_){
                 close(this->pipefds[!p][1]);
@@ -636,12 +697,19 @@ redo:
     return 0;
 }
 
-void sh::run(struct sockaddr_in *addr){
+void sh::run(struct sockaddr_in addr){
+    signal(SIGUSR1, sig_handler);
+    socketFunction::getInstance().allocate(addr);
 
-    servingID = this->id;
+    this->id = socketFunction::getInstance().getMyID();
+    this->isDone = true;
+    envVal new_envVal;
+    new_envVal.name = "PATH";
+    new_envVal.value = "bin:.";
+    this->envVals.push_back(new_envVal);
 
-    if(!this->isAllocated){  
-        return;
+    for(int k = 0; k < MAX_NUMPIPE; k++){
+        this->timerArr[k] = -1;
     }
 
     clearenv();
@@ -651,45 +719,28 @@ void sh::run(struct sockaddr_in *addr){
 	}
 
     string input;
-    char readbuf[15000];
 
     while(true){
         this->prompt();
-        if (FD_ISSET(this->ssock, &readfds)){
-            bzero(readbuf, sizeof(readbuf));
-            int readCount = read(this->ssock, readbuf, sizeof(readbuf));
-            if (readCount < 0){
-                cerr << this->id << ": read error." << endl;
-                return;
-            } else {
-                input = readbuf;
-                if (input[input.length()-1] == '\n'){
-                    input = input.substr(0, input.length()-1);
-                    if (input[input.length()-1] == '\r'){
-                        input = input.substr(0, input.length()-1);
-                    }
-                }
-            }
-        } else {
-            return;
-        }
+
+        getline(cin, input);
+
+        if (input[input.length()-1] == '\r'){
+			input = input.substr(0, input.length() - 1);
+		}
 
         if(input.length() == 0){
             this->isDone = true;
-            return;
+            continue;
         }
 
         this->parser(input, 0, input.length());
             
         if(this->parse[0] == "exit" || this->parse[0] == "EOF"){
-            logout(this->id);
-            FD_CLR(this->ssock, &activefds);
-            close(this->ssock);
+            socketFunction::getInstance().logout(this->id);
             this->parse.clear();
             input.clear();
             this->isDone = true;
-            this->isAllocated = false;
-            this->name = "(no name)";
             for (int i = 0; i < (int) userPipeVector.size(); i++){
                 if (userPipeVector[i].sourceID == this->id || userPipeVector[i].targetID == this->id){
                     close(userPipeVector[i].fd[1]);
@@ -697,7 +748,12 @@ void sh::run(struct sockaddr_in *addr){
                     userPipeVector.erase(userPipeVector.begin() + i);
                 }
             }
-            return;
+            pid_t wpid;
+            int status = 0;
+            while ((wpid = wait(&status)) > 0) {
+                ;
+            }
+            exit(0);
         }
             
         bool trigger = false;
@@ -713,10 +769,10 @@ void sh::run(struct sockaddr_in *addr){
             string msg;
             if (getenv(this->parse[1].c_str()) != NULL)
                 msg = getenv(this->parse[1].c_str());
-			    broadcast(NULL, &servingID, msg + "\n");
+			    socketFunction::getInstance().broadcast(&id, msg + "\n");
             trigger = true;
         }else if(this->parse[0] == "who"){
-            who();
+            socketFunction::getInstance().who();
             trigger = true;
         }else if(this->parse[0] == "tell"){
             string msg;
@@ -726,7 +782,7 @@ void sh::run(struct sockaddr_in *addr){
                     msg += " ";
                 }
             }
-            tell(stoi(this->parse[1]) - 1, msg);
+            socketFunction::getInstance().tell(stoi(this->parse[1]) - 1, msg);
             trigger = true;
         }else if(this->parse[0] == "yell"){
             string msg;
@@ -736,10 +792,10 @@ void sh::run(struct sockaddr_in *addr){
                     msg += " ";
                 }
             }
-            yell(msg);
+            socketFunction::getInstance().yell(msg);
             trigger = true;
         }else if(this->parse[0] == "name"){
-            setName(this->parse[1]);
+            socketFunction::getInstance().setName(this->parse[1]);
             trigger = true;
         }
 
@@ -749,7 +805,7 @@ void sh::run(struct sockaddr_in *addr){
                 this->timerArr[k] = (this->timerArr[k] == -1)?(-1):(this->timerArr[k] - 1);
             }
             this->isDone = true;
-            return;
+            continue;
         }
 
         this->parse.clear();
@@ -757,6 +813,5 @@ void sh::run(struct sockaddr_in *addr){
         this->execCmd(input);
         input.clear();
         this->isDone = true;
-        return;
     }
 }

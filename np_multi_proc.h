@@ -22,6 +22,8 @@
 #define MAX_NUMPIPE 200
 #define MAX_USER 30
 #define MAX_MSG_NUM 10
+#define MAX_MSG_SIZE 1024
+
 #define SHMKEY ((key_t) 1127)
 #define PERM 0666
 /* command symbol */
@@ -70,16 +72,19 @@ typedef struct envVal{
 
 typedef struct fifo {
     int	fd;
-    string name;
+    char name[64 + 1];
 }fifo_t;
 
 typedef struct user{
-    string msg[MAX_USER][MAX_MSG_NUM];
-    string address;
+    char msg[MAX_USER][MAX_MSG_NUM][MAX_MSG_SIZE + 1];
+    char address[16];
     /* User ID */
     int id;
-    bool isAllocated = false;
-    string name = "(no name)";
+    int port;
+    /* process id (for signal transmission) */
+    int pid;
+    bool isAllocated;
+    char name[21];
     fifo_t fifo[MAX_USER];
 }user;
 
@@ -99,7 +104,7 @@ class sh{
         bool isDone = true;
         string pipeMsg[2];
         vector<envVal> envVals;
-
+        int id;
         /* === Functions === */
 
         /* Show prompt */
@@ -110,14 +115,11 @@ class sh{
         void parser(string input, int start, int end);
         /* Exec the command */
         int execCmd(string input);
-        /* allocate for new user */
-        void allocate(struct sockaddr_in sin_);
     public:
         /* receive msg from other users */
-        void sig_handler(int sig);
         sh() = default;
         ~sh() = default;
-        void run(struct sockaddr_in *addr);
+        void run(struct sockaddr_in addr);
 };
 
 class socketFunction {
@@ -125,23 +127,26 @@ class socketFunction {
         static socketFunction& getInstance();
         int getMyID(void);
         user* getUserTable(void);
-        void broadcast(int *sou, int *des, string msg_);
+        string getName(string name_);
+        void broadcast(int *des, string msg_);
         void who();
         void tell(int targetID, string msg);
         void yell(string msg);
         void setName(string newName);
-        int createUserPipe(int sou, int des, string msg_);
-        int receiveFromUserPipe(int sou, int des, string msg_);
+        int createUserPipe(int des, string msg_);
+        int receiveFromUserPipe(int sou, string msg_);
         bool checkUserPipe(int &index, int source, int des);
-    private:
+        /* allocate for new user */
+        void allocate(struct sockaddr_in sin_);
+        void logout(int id);
         /* user id */
-        int id;
-        /* user table */
-        user* userTable;
+        int mID;
         void welcome(int id);
         void login(int id);
-        void logout(int id);
-        socketFunction() = default;
+    private:
+        /* user table */
+        user* userTable;
+        socketFunction();
         ~socketFunction() = default;
 };
 
