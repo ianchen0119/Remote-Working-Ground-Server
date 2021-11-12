@@ -7,6 +7,7 @@
 #include <sys/wait.h>
 #include <sys/socket.h>
 #include <sys/select.h>
+#include <sys/stat.h>
 #include <sys/ipc.h>
 #include <sys/shm.h>
 #include <stdlib.h>
@@ -43,6 +44,8 @@
 
 using namespace std;
 
+const char base_dir[] = "/net/gcs/110/310551012";
+
 typedef struct cmdBlock{
     /* numbered pipe */
     int num;
@@ -58,12 +61,6 @@ typedef struct cmdBlock{
     int fd_in = -1;
     int fd_out = -1;
 } cmdBlock;
-
-typedef struct userPipe{
-	int sourceID;
-	int targetID;
-	int fd[2];
-} userPipe;
 
 typedef struct envVal{
 	string name;
@@ -133,8 +130,9 @@ class socketFunction {
         void tell(int targetID, string msg);
         void yell(string msg);
         void setName(string newName);
-        int createUserPipe(int des, string msg_);
-        int receiveFromUserPipe(int sou, string msg_);
+        int createUserPipe(int des, string msg_, int *outfd);
+        int receiveFromUserPipe(int sou, string msg_, int *infd);
+        void removeUserPipe(int sou);
         bool checkUserPipe(int &index, int source, int des);
         /* allocate for new user */
         void allocate(struct sockaddr_in sin_);

@@ -2,10 +2,9 @@
 using namespace std;
 
 // ./demo.sh ../310551012_np_project2/np_multi_proc 12330
+// ./demo.sh ../310551012_np_project2 12340 12341 12342
 
 const int FD_NULL = open("/dev/null", O_RDWR);
-
-vector <userPipe> userPipeVector;
 
 /*
  *  Allocate a shared memory, that be used to store user informations for each user.
@@ -39,10 +38,22 @@ void shm_destroy(int sig)
 			cerr << "server err: shmget failed" << endl;
 			exit (1);
 		}
-		if(shmctl(shmid, IPC_RMID, NULL) < 0){
+
+        user* userTable = socketFunction::getInstance().getUserTable();
+        for(int i = 0; i < MAX_USER; i++){
+            for(int j = 0; i < MAX_USER; i++){
+                if(userTable[i].fifo[j].name[0] != 0){
+                    close(userTable[i].fifo[j].fd);
+                    unlink(userTable[i].fifo[j].name);
+                }  
+            }
+        }
+        
+        if(shmctl(shmid, IPC_RMID, NULL) < 0){
             cerr << "server err: shmctl IPC_RMID failed" << endl;
 			exit (1);
 		}
+
 		exit (0);
 	}
 	signal(sig, shm_destroy);
@@ -248,6 +259,20 @@ void socketFunction::login(int id){
 }
 
 void socketFunction::logout(int id){
+    for (int i = 0; i < MAX_USER; i++){
+        if(userTable[mID].fifo[i].fd > 0){
+            close(userTable[mID].fifo[i].fd);
+            userTable[mID].fifo[i].fd = 0;
+            unlink(userTable[mID].fifo[i].name);
+            memset(userTable[mID].fifo[i].name, 0, 65);
+        }
+        if(userTable[i].fifo[mID].fd > 0){
+            close(userTable[i].fifo[mID].fd);
+            userTable[i].fifo[mID].fd = 0;
+            unlink(userTable[i].fifo[mID].name);
+            memset(userTable[i].fifo[mID].name, 0, 65);
+        }            
+    }
 	string msg = "*** User '" + getName(userTable[id].name) + "' left. ***\n";
 	broadcast(NULL, msg);
     memset(&userTable[id], 0, sizeof(user));
@@ -257,40 +282,44 @@ void socketFunction::logout(int id){
     shmdt(userTable);
 }
 
-int socketFunction::createUserPipe(int des, string msg_){
+int socketFunction::createUserPipe(int des, string msg_, int *outfd){
     int index;
     int sou = mID;
-    int res;
     if(des < 0 || des > 29 || !userTable[des].isAllocated){
         string msg = "*** Error: user #" + to_string(des + 1) + " does not exist yet. ***\n";
         broadcast(&sou, msg);
-        res = -1;
     }else{
         if(checkUserPipe(index, sou, des)){
             string msg = "*** Error: the pipe #" + to_string(sou + 1) + "->#" + to_string(des + 1) + " already exists. ***\n";
             broadcast(&sou, msg);
-            res = -1;
         }else{
             string msg = "*** " + getName(userTable[sou].name) + " (#" + to_string(sou + 1) + ") just piped '" + msg_ + "' to "
-							+ userTable[des].name + " (#" + to_string(des + 1) + ") ***\n";
+							+ getName(userTable[des].name) + " (#" + to_string(des + 1) + ") ***\n";
             broadcast(NULL, msg);
-            userPipe newElement;
-            newElement.sourceID = sou;
-            newElement.targetID = des;
-            if(pipe(newElement.fd) < 0){
-                cerr << "err" << endl;
-                for(;;){
-
-                }
+            string fileName = "/fifo" + to_string(sou) + "->" + to_string(des);
+            strncpy(userTable[sou].fifo[des].name, base_dir, 65);
+            strcat(userTable[sou].fifo[des].name, fileName.c_str());
+            if(mkfifo(userTable[sou].fifo[des].name, 0600) < 0){
+                cerr << "error: failed to create FIFO (" + string(userTable[sou].fifo[des].name) + ") #" << errno << endl;
+            }else{
+                kill(userTable[des].pid, SIGUSR2);
+                *outfd = open(userTable[sou].fifo[des].name, O_WRONLY);
+                return 0;
             }
-            userPipeVector.push_back(newElement);
-            res = 0;
         }
     }
-    return res;
+    return -1;
 }
 
-int socketFunction::receiveFromUserPipe(int sou, string msg_){
+void socketFunction::removeUserPipe(int sou){
+    int des = mID;
+    close(userTable[sou].fifo[des].fd);
+    userTable[sou].fifo[des].fd = 0;
+    unlink(userTable[sou].fifo[des].name);
+    memset(userTable[sou].fifo[des].name, 0, 65);
+}
+
+int socketFunction::receiveFromUserPipe(int sou, string msg_, int *infd){
     int index;
     int des = mID;
     if(sou < 0 || sou > 29 || !userTable[sou].isAllocated){
@@ -300,8 +329,10 @@ int socketFunction::receiveFromUserPipe(int sou, string msg_){
     }else{
         if(checkUserPipe(index, sou, des)){
             string msg = "*** " + getName(userTable[des].name) + " (#" + to_string(des + 1) + ") just received from "
-							+ userTable[sou].name + " (#" + to_string(sou + 1) + ") by '" + msg_ + "' ***\n";
+							+ getName(userTable[sou].name) + " (#" + to_string(sou + 1) + ") by '" + msg_ + "' ***\n";
 			broadcast(NULL, msg);
+            user* userTable = socketFunction::getInstance().getUserTable();
+            *infd = userTable[sou].fifo[des].fd;
         }else{
             string msg = "*** Error: the pipe #" + to_string(sou + 1) + "->#" + to_string(des + 1) + " does not exist yet. ***\n";
 			broadcast(&des, msg);
@@ -312,21 +343,17 @@ int socketFunction::receiveFromUserPipe(int sou, string msg_){
 }
 
 bool socketFunction::checkUserPipe(int &index, int sou, int des){
-	bool isExist = false;
-	for (int i = 0; i < (int) userPipeVector.size(); i++){
-		if (userPipeVector[i].sourceID == sou && userPipeVector[i].targetID == des){
-			index = i;
-			isExist = true;
-			break;
-		}
-	}
+	bool isExist = true;
+	if(userTable[sou].fifo[des].name[0] == 0){
+        isExist = false;
+    }
 	return isExist;
 }
 
 void sig_handler(int sig){
-    if (sig == SIGUSR1) {
-        user *userTable = socketFunction::getInstance().getUserTable();
-        int uid = socketFunction::getInstance().getMyID();
+    user *userTable = socketFunction::getInstance().getUserTable();
+    int uid = socketFunction::getInstance().getMyID();
+    if(sig == SIGUSR1){ // receive msg
 		int	i, j;
 		for (i = 0; i < MAX_USER; ++i) {
 			for (j = 0; j < MAX_MSG_NUM; ++j) {
@@ -336,7 +363,14 @@ void sig_handler(int sig){
 				}
 			}
 		}
-	}
+	}else if(sig == SIGUSR2){ // user pipe
+        for(int i = 0; i < MAX_USER; i++){
+            if(userTable[i].fifo[uid].fd == 0 && userTable[i].fifo[uid].name[0] != 0){
+                userTable[i].fifo[uid].fd = open(userTable[i].fifo[uid].name, O_RDONLY | O_NONBLOCK);
+            }
+        }
+        
+    }
 
 	signal(sig, sig_handler);
 }
@@ -510,18 +544,6 @@ int sh::execCmd(string input){
 
         this->parse.clear();
 
-        if(this->cmdBlockSet[i].fd_in > -1){
-            if(socketFunction::getInstance().receiveFromUserPipe(this->cmdBlockSet[i].fd_in, this->pipeMsg[0]) < 0){
-                this->cmdBlockSet[i].fd_in = -2;
-            }
-        }
-
-        if(this->cmdBlockSet[i].fd_out > -1){
-            if(socketFunction::getInstance().createUserPipe(this->cmdBlockSet[i].fd_out, this->pipeMsg[1]) < 0){
-                this->cmdBlockSet[i].fd_out = -2;
-            }
-        }
-
 redo:
         int pid = fork();
 
@@ -550,18 +572,6 @@ redo:
                     close(this->numPipefds[k][0]);
                 }
             }
-
-            /* user pipe */
-            if(this->cmdBlockSet[i].fd_in > -1){
-                int index = this->cmdBlockSet[i].fd_in;
-                for (int i = 0; i < (int) userPipeVector.size(); i++){
-                    if (userPipeVector[i].sourceID == index && userPipeVector[i].targetID == this->id){
-                        close(userPipeVector[i].fd[1]);
-                        close(userPipeVector[i].fd[0]);
-                        userPipeVector.erase(userPipeVector.begin() + i);
-                    }
-                }
-            }
             
             int status;
             int next = (int)this->cmdBlockSet[i].next;
@@ -578,14 +588,6 @@ redo:
             }
         }else{
             // child
-
-            if(this->cmdBlockSet[i].fd_out < -1){
-                dup2(FD_NULL, STDOUT_FILENO);
-            }
-
-            if(this->cmdBlockSet[i].fd_in < -1){
-                dup2(FD_NULL, STDIN_FILENO);
-            }
 
             if(this->cmdBlockSet[i].next == pipe_ && this->cmdBlockSet[i].prev == pipe_){
                 close(this->pipefds[!p][1]);
@@ -631,29 +633,25 @@ redo:
                 }
             }
 
-
-            /* user pipe */
-            if(this->cmdBlockSet[i].fd_out > -1){
-                int index = this->cmdBlockSet[i].fd_out;
-                for (int i = 0; i < (int) userPipeVector.size(); i++){
-                    if (userPipeVector[i].sourceID == this->id && userPipeVector[i].targetID == index){
-                        close(userPipeVector[i].fd[0]);
-                        dup2(userPipeVector[i].fd[1], STDOUT_FILENO);
-                        close(userPipeVector[i].fd[1]);
-                        break;
-                    }
+            if(this->cmdBlockSet[i].fd_in > -1){
+                int pipeWrite = 0;
+                if(socketFunction::getInstance().receiveFromUserPipe(this->cmdBlockSet[i].fd_in, this->pipeMsg[0], &pipeWrite) == 0){
+                    dup2(pipeWrite, STDIN_FILENO);
+                    close(pipeWrite);
+                    socketFunction::getInstance().removeUserPipe(this->cmdBlockSet[i].fd_in);
+                }else{
+                    dup2(FD_NULL, STDIN_FILENO);
                 }
             }
 
-            if(this->cmdBlockSet[i].fd_in > -1){
-                int index = this->cmdBlockSet[i].fd_in;
-                for (int i = 0; i < (int) userPipeVector.size(); i++){
-                    if (userPipeVector[i].sourceID == index && userPipeVector[i].targetID == this->id){
-                        close(userPipeVector[i].fd[1]);
-                        dup2(userPipeVector[i].fd[0], STDIN_FILENO);
-                        close(userPipeVector[i].fd[0]);
-                        break;
-                    }
+            /* user pipe */
+            if(this->cmdBlockSet[i].fd_out > -1){
+                int pipeRead = 0;
+                if(socketFunction::getInstance().createUserPipe(this->cmdBlockSet[i].fd_out, this->pipeMsg[1], &pipeRead) == 0){
+                    dup2(pipeRead, STDOUT_FILENO);
+                    close(pipeRead);
+                }else{
+                    dup2(FD_NULL, STDOUT_FILENO);
                 }
             }
 
@@ -699,6 +697,7 @@ redo:
 
 void sh::run(struct sockaddr_in addr){
     signal(SIGUSR1, sig_handler);
+    signal(SIGUSR2, sig_handler);
     socketFunction::getInstance().allocate(addr);
 
     this->id = socketFunction::getInstance().getMyID();
@@ -741,13 +740,6 @@ void sh::run(struct sockaddr_in addr){
             this->parse.clear();
             input.clear();
             this->isDone = true;
-            for (int i = 0; i < (int) userPipeVector.size(); i++){
-                if (userPipeVector[i].sourceID == this->id || userPipeVector[i].targetID == this->id){
-                    close(userPipeVector[i].fd[1]);
-                    close(userPipeVector[i].fd[0]);
-                    userPipeVector.erase(userPipeVector.begin() + i);
-                }
-            }
             pid_t wpid;
             int status = 0;
             while ((wpid = wait(&status)) > 0) {

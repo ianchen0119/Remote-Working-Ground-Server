@@ -66,7 +66,7 @@ int main(int argc, char *argv[]){
 		bcopy(&activefds, &readfds, sizeof(readfds));
 
 		if (select(findMax(msock), &readfds, NULL, NULL, &timeval) < 0){
-			cerr << "select fail" << endl;
+			cerr << "select fail #" << errno << endl;
 		}
 
 		if (FD_ISSET(msock, &readfds)){
