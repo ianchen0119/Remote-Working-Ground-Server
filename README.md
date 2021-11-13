@@ -1,29 +1,51 @@
-# README #
+# Remote Working Ground (rwg) Server
 
-This README would normally document whatever steps are necessary to get your application up and running.
+## features
 
-### What is this repository for? ###
+- [x] remote shell
+	- numbered pipe
+	- multi pipe
+	- environment variables
+	- command execution
+- [x] chat room
+- [x] user pipe
 
-* Quick summary
-* Version
-* [Learn Markdown](https://bitbucket.org/tutorials/markdowndemo)
+## Intro
 
-### How do I get set up? ###
+### user pipe
 
-* Summary of set up
-* Configuration
-* Dependencies
-* Database configuration
-* How to run tests
-* Deployment instructions
+send the data to the other user:
+```sh
+ls >2 // send to user #2
+```
+receive the data from specified user:
+```sh
+cat <1 // receive from user #1
+```
 
-### Contribution guidelines ###
+### chatroom
 
-* Writing tests
-* Code review
-* Other guidelines
+- who
+- name
+set a new name!
+```
+name Ian
+```
+- tell
+```
+tell 2 Hello! // tell to user #2
+```
+- yell
+```
+yell Hello, everyone! // broadcast
+```
+- exit
 
-### Who do I talk to? ###
+### numbered pipe
 
-* Repo owner or admin
-* Other community or team contact
+Try it!
+```sh
+ls |2
+noop
+cat
+```
