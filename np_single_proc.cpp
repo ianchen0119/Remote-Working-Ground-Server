@@ -64,9 +64,10 @@ int main(int argc, char *argv[]){
 	while(true){
 
 		bcopy(&activefds, &readfds, sizeof(readfds));
-
+reselect:
 		if (select(findMax(msock), &readfds, NULL, NULL, &timeval) < 0){
-			cerr << "select fail #" << errno << endl;
+			goto reselect;
+            
 		}
 
 		if (FD_ISSET(msock, &readfds)){
